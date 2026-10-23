@@ -5,10 +5,10 @@ edition = "2021"
 description = "Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/christopher-two/overridepulse"
-homepage = "https://github.com/christopher-two/overridepulse"
+repository = "https://github.com/OverrideLLC/overridepulse"
+homepage = "https://github.com/OverrideLLC/overridepulse"
 documentation = "https://docs.rs/overridepulse"
-authors = ["ChristopherTwo <christopher.override@gmail.com>"]
+authors = ["Override LLC <christopher.override@gmail.com>", "ChristopherTwo <christopher.override@gmail.com>"]
 keywords = ["android", "adb", "gradle", "tui", "ratatui"]
 categories = ["command-line-utilities", "development-tools"]
 

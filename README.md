@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/overridepulse.svg)](https://crates.io/crates/overridepulse)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
-[![GitHub](https://img.shields.io/github/v/release/christopher-two/overridepulse?include_prereleases&label=release)](https://github.com/christopher-two/overridepulse/releases)
+[![GitHub](https://img.shields.io/github/v/release/OverrideLLC/overridepulse?include_prereleases&label=release)](https://github.com/OverrideLLC/overridepulse/releases)
 
 > **Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)**
 
@@ -41,13 +41,13 @@ cargo install overridepulse
 ### From GitHub
 
 ```bash
-cargo install --git https://github.com/christopher-two/overridepulse
+cargo install --git https://github.com/OverrideLLC/overridepulse
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/christopher-two/overridepulse.git
+git clone https://github.com/OverrideLLC/overridepulse.git
 cd overridepulse
 cargo build --release
 sudo cp target/release/overridepulse /usr/local/bin/
@@ -150,4 +150,4 @@ overridepulse --tick-rate 100
 
 This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for details.
 
-Copyright (c) 2026 ChristopherTwo.
+Copyright (c) 2026 Override LLC & ChristopherTwo.
