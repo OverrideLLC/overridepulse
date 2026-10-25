@@ -120,6 +120,7 @@ pub struct ActionContext {
     pub main_activity: Option<String>,
     pub variant: String,
     pub adb_path: PathBuf,
+    pub module: Option<String>,
 }
 
 impl ActionContext {
@@ -131,6 +132,7 @@ impl ActionContext {
             main_activity: None,
             variant: "debug".to_string(),
             adb_path: PathBuf::from("adb"),
+            module: None,
         }
     }
 
@@ -151,6 +153,11 @@ impl ActionContext {
 
     pub fn with_adb_path(mut self, adb: impl Into<PathBuf>) -> Self {
         self.adb_path = adb.into();
+        self
+    }
+
+    pub fn with_module(mut self, module: impl Into<String>) -> Self {
+        self.module = Some(module.into());
         self
     }
 
@@ -222,6 +229,37 @@ pub fn find_latest_apk(search_dir: &Path, variant: Option<&str>) -> Option<PathB
     find_latest_artifact(search_dir, "apk", variant)
 }
 
+/// Locates the most recently modified `.apk` file under `project_root` and inspects
+/// `output-metadata.json` in the same directory (or its immediate parent) to extract the exact `applicationId`.
+pub fn find_app_id_near_apk(project_root: &Path, variant: Option<&str>) -> Option<String> {
+    let apk_path = find_latest_apk(project_root, variant)?;
+    let apk_dir = apk_path.parent()?;
+
+    // 1. Same directory as the APK (e.g., <module>/build/outputs/apk/debug/output-metadata.json)
+    let direct_meta = apk_dir.join("output-metadata.json");
+    if direct_meta.exists() {
+        if let Ok(content) = std::fs::read_to_string(&direct_meta) {
+            if let Some(id) = crate::android::project::parse_output_metadata(&content) {
+                return Some(id);
+            }
+        }
+    }
+
+    // 2. Parent directory (e.g., <module>/build/outputs/apk/output-metadata.json)
+    if let Some(parent) = apk_dir.parent() {
+        let parent_meta = parent.join("output-metadata.json");
+        if parent_meta.exists() {
+            if let Ok(content) = std::fs::read_to_string(&parent_meta) {
+                if let Some(id) = crate::android::project::parse_output_metadata(&content) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Locates the most recently modified `.aab` file under `search_dir`.
 pub fn find_latest_aab(search_dir: &Path, variant: Option<&str>) -> Option<PathBuf> {
     find_latest_artifact(search_dir, "aab", variant)
@@ -237,7 +275,7 @@ fn find_latest_artifact(
     }
 
     let mut matches = Vec::new();
-    collect_files_recursive(search_dir, extension, &mut matches, 6);
+    collect_files_recursive(search_dir, extension, &mut matches, 8);
 
     // Filter out test and unaligned artifacts
     matches.retain(|p| {
@@ -653,6 +691,14 @@ impl Drop for ProcessRunner {
 
 /// Helper to resolve `applicationId` from context or scan project outputs and manifests.
 pub fn resolve_or_extract_app_id(ctx: &ActionContext) -> Option<String> {
+    // 1. Output metadata located near the latest APK (100% accurate for built APKs)
+    if let Some(id) = find_app_id_near_apk(&ctx.project_root, Some(&ctx.variant)) {
+        return Some(id);
+    }
+    if let Some(id) = find_app_id_near_apk(&ctx.project_root, None) {
+        return Some(id);
+    }
+
     if let Some(ref id) = ctx.application_id {
         if !id.trim().is_empty() {
             return Some(id.clone());
@@ -1077,6 +1123,15 @@ async fn execute_build_and_install_debug(
         "Found APK: {}",
         apk_path.display()
     )));
+
+    // 100% infallible: read output-metadata.json located in the APK folder
+    let app_id_from_apk_dir = apk_path
+        .parent()
+        .map(|p| p.join("output-metadata.json"))
+        .filter(|p| p.exists())
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| crate::android::project::parse_output_metadata(&c));
+
     let _ = sender.send(AppEvent::ProcessOutput(format!(
         "Installing APK to device {}...",
         ctx.serial
@@ -1088,7 +1143,7 @@ async fn execute_build_and_install_debug(
 
     match run_streaming_cmd(adb_cmd, "ADB install", sender, cancel_rx).await {
         Ok(true) => {
-            let effective_app_id = resolve_or_extract_app_id(ctx);
+            let effective_app_id = app_id_from_apk_dir.or_else(|| resolve_or_extract_app_id(ctx));
             if let Some(app_id) = effective_app_id {
                 let _ = sender.send(AppEvent::ProcessOutput(format!(
                     "🚀 Launching application '{app_id}' on device..."
@@ -1898,5 +1953,27 @@ mod tests {
             resolve_or_extract_app_id(&ctx),
             Some("com.explicit.appid".to_string())
         );
+    }
+
+    #[test]
+    fn test_find_app_id_near_apk() {
+        let temp_dir = std::env::temp_dir().join(format!("overridepulse_apk_near_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let apk_dir = temp_dir.join("composeApp/build/outputs/apk/debug");
+        fs::create_dir_all(&apk_dir).unwrap();
+
+        let apk_file = apk_dir.join("composeApp-debug.apk");
+        File::create(&apk_file).unwrap();
+
+        let meta_file = apk_dir.join("output-metadata.json");
+        fs::write(&meta_file, r#"{"applicationId": "org.override.near.apk"}"#).unwrap();
+
+        assert_eq!(
+            find_app_id_near_apk(&temp_dir, Some("debug")),
+            Some("org.override.near.apk".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

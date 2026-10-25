@@ -236,6 +236,9 @@ fn trigger_quick_action(
     if let Some(ref activity) = app.project.launcher_activity {
         ctx = ctx.with_main_activity(activity);
     }
+    if let Some(ref module) = app.project.active_module {
+        ctx = ctx.with_module(module);
+    }
 
     runner.execute_action(action, ctx, sender.clone());
 }
@@ -277,6 +280,9 @@ fn trigger_device_action(
     }
     if let Some(ref activity) = app.project.launcher_activity {
         ctx = ctx.with_main_activity(activity);
+    }
+    if let Some(ref module) = app.project.active_module {
+        ctx = ctx.with_module(module);
     }
 
     runner.execute_device_action(action, ctx, sender.clone());

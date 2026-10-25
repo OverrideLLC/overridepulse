@@ -11,6 +11,14 @@ OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) desig
 
 ---
 
+## 🌟 What's New in v0.2.1
+
+- 🎯 **Strict Android Application Module Detection**: Complete multi-module and Kotlin Multiplatform (KMP / Clean Architecture) resolution. Accurately prioritizes application modules (`:composeApp`, `:androidApp`, `:app`) over library domain/data modules (`:auth:domain`, `:core:data`), completely preventing library namespace misclassification.
+- 📦 **Infallible Direct APK Package Resolution**: Automatic detection of `output-metadata.json` directly adjacent to the compiled APK file.
+- 📂 **Multi-Line Settings & KMP Manifest Support**: Robust multi-line `include(...)` parser for `settings.gradle[.kts]` and full support for Kotlin Multiplatform `src/androidMain/AndroidManifest.xml`.
+
+---
+
 ## 🌟 What's New in v0.2.0
 
 - 🎯 **Deep `applicationId` Detection**: Multi-pass resolution inspecting Kotlin DSL (`build.gradle.kts`), Groovy DSL (`build.gradle`), `namespace`, `gradle.properties`, and automatic fallback to `build/outputs/apk/**/output-metadata.json`.

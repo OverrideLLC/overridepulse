@@ -85,45 +85,110 @@ impl AndroidProject {
         });
 
         let mut modules = parsed_modules;
+
+        // Auto-discover any submodules with build.gradle / build.gradle.kts up to depth 3
+        discover_modules_recursive(&root, &root, 0, 3, &mut modules);
+
         if modules.is_empty() && (root.join("app/build.gradle").exists() || root.join("app/build.gradle.kts").exists()) {
             modules.push(":app".to_string());
         }
 
-        let active_module = if modules.contains(&":app".to_string()) {
-            Some(":app".to_string())
-        } else {
-            modules.first().cloned()
+        // 2. Classify each module strictly into Tiers (Tier 1: Explicit App ID, Tier 2: App Plugin / Launcher, Tier 3: Library)
+        let mut scanned_modules = Vec::new();
+
+        for m in &modules {
+            let rel_path = m.trim_start_matches(':').replace(':', "/");
+            let mod_dir = root.join(&rel_path);
+            if !mod_dir.exists() {
+                continue;
+            }
+
+            let (app_id, namespace, variants) = parse_build_file(&mod_dir);
+            let build_content = std::fs::read_to_string(mod_dir.join("build.gradle.kts"))
+                .or_else(|_| std::fs::read_to_string(mod_dir.join("build.gradle")))
+                .unwrap_or_default();
+
+            let meta_id = find_application_id_in_metadata(&mod_dir);
+            let launcher_activity = parse_manifest_file(&mod_dir);
+
+            let is_app_gradle = is_android_application_gradle(&build_content);
+            let is_lib_gradle = is_android_library_gradle(&build_content);
+
+            // Tier 1: Explicit applicationId in build script or output-metadata.json
+            // Tier 2: Application plugin applied OR manifest launcher activity (and not pure library)
+            // Tier 3: Library modules
+            let tier = if app_id.is_some() || meta_id.is_some() {
+                1
+            } else if is_app_gradle || (launcher_activity.is_some() && !is_lib_gradle) {
+                2
+            } else {
+                3
+            };
+
+            let effective_app_id = if tier == 1 {
+                app_id.or(meta_id)
+            } else if tier == 2 {
+                app_id
+                    .or(namespace.clone())
+                    .or_else(|| parse_manifest_file_package(&mod_dir))
+            } else {
+                None // Tier 3: Never use library namespace as applicationId
+            };
+
+            scanned_modules.push(ScannedModule {
+                module_name: m.clone(),
+                module_dir: mod_dir,
+                app_id: effective_app_id,
+                namespace,
+                variants,
+                launcher_activity,
+                tier,
+            });
+        }
+
+        // Prioritize canonical application names
+        let rank_name = |name: &str| -> usize {
+            let clean = name.trim_start_matches(':');
+            match clean {
+                "composeApp" => 0,
+                "androidApp" => 1,
+                "app" => 2,
+                _ => 10,
+            }
         };
 
-        // 2. Build Gradle parsing (Application ID, Namespace, Variants)
-        let module_dir = match &active_module {
-            Some(m) => {
-                let rel_path = m.trim_start_matches(':').replace(':', "/");
-                let candidate = root.join(&rel_path);
-                if candidate.exists() {
-                    candidate
-                } else if root.join("app").exists() {
-                    root.join("app")
-                } else {
-                    root.clone()
-                }
-            }
-            None => {
-                if root.join("app").exists() {
-                    root.join("app")
-                } else {
-                    root.clone()
-                }
-            }
+        let mut tier1: Vec<&ScannedModule> = scanned_modules.iter().filter(|m| m.tier == 1).collect();
+        let mut tier2: Vec<&ScannedModule> = scanned_modules.iter().filter(|m| m.tier == 2).collect();
+        let mut tier3: Vec<&ScannedModule> = scanned_modules.iter().filter(|m| m.tier == 3).collect();
+
+        tier1.sort_by_key(|m| rank_name(&m.module_name));
+        tier2.sort_by_key(|m| rank_name(&m.module_name));
+        tier3.sort_by_key(|m| rank_name(&m.module_name));
+
+        let selected = tier1.first().or_else(|| tier2.first()).or_else(|| tier3.first()).copied();
+
+        let (active_module, mut app_id, mut namespace, variants, launcher_activity) = match selected {
+            Some(sm) => (
+                Some(sm.module_name.clone()),
+                sm.app_id.clone(),
+                sm.namespace.clone(),
+                sm.variants.clone(),
+                sm.launcher_activity.clone(),
+            ),
+            None => (
+                None,
+                None,
+                None,
+                vec!["debug".to_string(), "release".to_string()],
+                None,
+            ),
         };
 
-        let (mut app_id, mut namespace, variants) = parse_build_file(&module_dir);
-
-        // Fallback cross-assignment between namespace and applicationId if one is missing
-        if app_id.is_none() && namespace.is_some() {
-            app_id = namespace.clone();
-        } else if namespace.is_none() && app_id.is_some() {
-            namespace = app_id.clone();
+        // If active module was selected and has namespace, but app_id wasn't set, assign if Tier 1 or 2
+        if let Some(sm) = selected {
+            if app_id.is_none() && sm.tier <= 2 && sm.namespace.is_some() {
+                app_id = sm.namespace.clone();
+            }
         }
 
         // Exhaustive fallback scanning of output-metadata.json, merged manifests, properties, and all gradle files
@@ -146,8 +211,10 @@ impl AndroidProject {
         };
 
         // 3. AndroidManifest.xml parsing (Launcher Activity)
-        let launcher_activity = parse_manifest_file(&module_dir)
+        let launcher_activity = launcher_activity
             .or_else(|| parse_manifest_file(&root.join("app")))
+            .or_else(|| parse_manifest_file(&root.join("composeApp")))
+            .or_else(|| parse_manifest_file(&root.join("androidApp")))
             .or_else(|| parse_manifest_file(&root))
             .or_else(|| find_launcher_activity_in_intermediates(&root));
 
@@ -214,6 +281,107 @@ impl Default for AndroidProject {
 // Internal Helpers & Parsers
 // ============================================================================
 
+#[derive(Debug)]
+struct ScannedModule {
+    module_name: String,
+    #[allow(dead_code)]
+    module_dir: PathBuf,
+    app_id: Option<String>,
+    namespace: Option<String>,
+    variants: Vec<String>,
+    launcher_activity: Option<String>,
+    tier: u8,
+}
+
+fn discover_modules_recursive(
+    dir: &Path,
+    root: &Path,
+    depth: usize,
+    max_depth: usize,
+    modules: &mut Vec<String>,
+) {
+    if depth > max_depth || !dir.is_dir() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || name_str == "build"
+                || name_str == "target"
+                || name_str == "node_modules"
+                || name_str == "gradle"
+            {
+                continue;
+            }
+
+            let has_build_file = path.join("build.gradle").exists()
+                || path.join("build.gradle.kts").exists();
+
+            if has_build_file {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    let mod_str = format!(":{}", rel.to_string_lossy().replace('/', ":"));
+                    if !modules.contains(&mod_str) {
+                        modules.push(mod_str);
+                    }
+                }
+            }
+
+            discover_modules_recursive(&path, root, depth + 1, max_depth, modules);
+        }
+    }
+}
+
+/// Returns true if the Gradle build script defines or applies an Android Application configuration.
+pub fn is_android_application_gradle(content: &str) -> bool {
+    let has_explicit_app_id = content.contains("applicationId")
+        || content.contains("mainApplicationId")
+        || content.contains("setApplicationId");
+
+    let has_app_plugin = content.contains("com.android.application")
+        || content.contains("androidApplication")
+        || content.contains("libs.plugins.android.application")
+        || content.contains("libs.plugins.androidApplication")
+        || content.contains("id(\"com.android.application\")")
+        || content.contains("id('com.android.application')")
+        || content.contains(".android.application");
+
+    if has_explicit_app_id {
+        return true;
+    }
+
+    if has_app_plugin {
+        let is_pure_lib = (content.contains("com.android.library")
+            || content.contains("androidLibrary")
+            || content.contains("libs.plugins.android.library")
+            || content.contains("libs.plugins.androidLibrary"))
+            && !content.contains("com.android.application")
+            && !content.contains("androidApplication");
+
+        return !is_pure_lib;
+    }
+
+    false
+}
+
+/// Returns true if the Gradle build script defines an Android Library plugin and is NOT an application.
+pub fn is_android_library_gradle(content: &str) -> bool {
+    let has_lib_plugin = content.contains("com.android.library")
+        || content.contains("androidLibrary")
+        || content.contains("libs.plugins.android.library")
+        || content.contains("libs.plugins.androidLibrary");
+
+    has_lib_plugin && !is_android_application_gradle(content)
+}
+
 /// Searches upward starting at `start_path` for an Android project root.
 pub fn find_project_root(start_path: &Path) -> Option<PathBuf> {
     let start = if start_path.is_file() {
@@ -237,9 +405,13 @@ pub fn is_android_root_dir(dir: &Path) -> bool {
     let has_build = dir.join("build.gradle").exists()
         || dir.join("build.gradle.kts").exists()
         || dir.join("app").join("build.gradle").exists()
-        || dir.join("app").join("build.gradle.kts").exists();
+        || dir.join("app").join("build.gradle.kts").exists()
+        || dir.join("composeApp").join("build.gradle").exists()
+        || dir.join("composeApp").join("build.gradle.kts").exists()
+        || dir.join("androidApp").join("build.gradle").exists()
+        || dir.join("androidApp").join("build.gradle.kts").exists();
 
-    (has_wrapper || has_settings) && has_build
+    (has_wrapper || has_settings) && (has_build || has_settings)
 }
 
 /// Recursive scanner for `discover_nearby_projects`.
@@ -299,12 +471,12 @@ pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
     let name_regex = Regex::new(r#"rootProject\.name\s*=\s*['"]([^'"]+)['"]"#).unwrap();
     let name = name_regex.captures(content).map(|cap| cap[1].to_string());
 
-    // 2. include lines
-    let include_regex = Regex::new(r#"(?m)^\s*include\s*\(?([^)\r\n]+)\)?"#).unwrap();
     let module_regex = Regex::new(r#"['"](:?[\w\-:]+)['"]"#).unwrap();
     let mut modules = Vec::new();
 
-    for cap in include_regex.captures_iter(content) {
+    // 2. include(...) blocks (supports multiline and single-line with parentheses)
+    let include_paren_regex = Regex::new(r#"(?s)\binclude\s*\(([^)]+)\)"#).unwrap();
+    for cap in include_paren_regex.captures_iter(content) {
         let args = &cap[1];
         for mod_cap in module_regex.captures_iter(args) {
             let mut m = mod_cap[1].to_string();
@@ -314,6 +486,33 @@ pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
             if !modules.contains(&m) {
                 modules.push(m);
             }
+        }
+    }
+
+    // 3. include lines without parentheses (Groovy style: `include ':app', ':core'`)
+    let include_line_regex = Regex::new(r#"(?m)^\s*include\s+([^\r\n(]+)"#).unwrap();
+    for cap in include_line_regex.captures_iter(content) {
+        let line = &cap[1];
+        for mod_cap in module_regex.captures_iter(line) {
+            let mut m = mod_cap[1].to_string();
+            if !m.starts_with(':') {
+                m = format!(":{m}");
+            }
+            if !modules.contains(&m) {
+                modules.push(m);
+            }
+        }
+    }
+
+    // 4. includeBuild lines/blocks (e.g. includeBuild("build-logic") or includeBuild 'logic')
+    let include_build_regex = Regex::new(r#"\bincludeBuild\s*\(?\s*['"]([^'"]+)['"]\s*\)?"#).unwrap();
+    for cap in include_build_regex.captures_iter(content) {
+        let mut m = cap[1].to_string();
+        if !m.starts_with(':') {
+            m = format!(":{m}");
+        }
+        if !modules.contains(&m) {
+            modules.push(m);
         }
     }
 
@@ -427,13 +626,16 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
     (application_id, namespace, deduped_variants)
 }
 
-/// Reads and parses `AndroidManifest.xml` in `module_dir` or `module_dir/src/main`.
+/// Reads and parses `AndroidManifest.xml` in `module_dir`, `module_dir/src/main`, or `module_dir/src/androidMain`.
 fn parse_manifest_file(dir: &Path) -> Option<String> {
     let direct_manifest = dir.join("AndroidManifest.xml");
     let src_manifest = dir.join("src/main/AndroidManifest.xml");
+    let kmp_manifest = dir.join("src/androidMain/AndroidManifest.xml");
 
     let path = if src_manifest.exists() {
         src_manifest
+    } else if kmp_manifest.exists() {
+        kmp_manifest
     } else if direct_manifest.exists() {
         direct_manifest
     } else {
@@ -442,6 +644,26 @@ fn parse_manifest_file(dir: &Path) -> Option<String> {
 
     let content = std::fs::read_to_string(path).ok()?;
     parse_manifest_launcher_activity(&content)
+}
+
+/// Reads and parses the `package="..."` attribute from `AndroidManifest.xml` in `module_dir` or its src subdirectories.
+fn parse_manifest_file_package(dir: &Path) -> Option<String> {
+    let direct_manifest = dir.join("AndroidManifest.xml");
+    let src_manifest = dir.join("src/main/AndroidManifest.xml");
+    let kmp_manifest = dir.join("src/androidMain/AndroidManifest.xml");
+
+    let path = if src_manifest.exists() {
+        src_manifest
+    } else if kmp_manifest.exists() {
+        kmp_manifest
+    } else if direct_manifest.exists() {
+        direct_manifest
+    } else {
+        return None;
+    };
+
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_manifest_package_name(&content)
 }
 
 /// Extracts the launcher activity (`android.intent.action.MAIN` + `android.intent.category.LAUNCHER`) from manifest XML.
@@ -499,12 +721,17 @@ pub fn parse_manifest_package_name(content: &str) -> Option<String> {
 /// Scans for `applicationId` or package name across `output-metadata.json`,
 /// merged manifests, `gradle.properties`, and all project Gradle files.
 pub fn extract_application_id_from_path(root: &Path) -> Option<String> {
+    // 0. Locate output-metadata.json near the latest APK
+    if let Some(id) = crate::android::runner::find_app_id_near_apk(root, None) {
+        return Some(id);
+    }
+
     // 1. Gradle output-metadata.json (100% accurate if project has been built)
     if let Some(id) = find_application_id_in_metadata(root) {
         return Some(id);
     }
 
-    // 2. Merged / packaged manifests from Gradle build outputs
+    // 2. Merged / packaged manifests from Gradle build outputs in all submodules
     if let Some(id) = find_application_id_in_intermediates(root) {
         return Some(id);
     }
@@ -528,48 +755,79 @@ pub fn extract_application_id_from_path(root: &Path) -> Option<String> {
 }
 
 fn find_application_id_in_metadata(root: &Path) -> Option<String> {
-    let candidates = [
-        root.join("app/build/outputs/apk"),
-        root.join("build/outputs/apk"),
-        root.join("app/build/outputs"),
-        root.join("build/outputs"),
-    ];
+    let mut metadata_files = Vec::new();
+    collect_metadata_files_recursive(root, 0, 7, &mut metadata_files);
 
-    for candidate in &candidates {
-        if candidate.exists() {
-            if let Some(id) =
-                scan_file_named(candidate, "output-metadata.json", 4, &parse_output_metadata)
-            {
+    // Sort descending by modified timestamp (latest build outputs first)
+    metadata_files.sort_by(|a, b| {
+        let time_a = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let time_b = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        time_b.cmp(&time_a)
+    });
+
+    for file in metadata_files {
+        if let Ok(content) = std::fs::read_to_string(&file) {
+            if let Some(id) = parse_output_metadata(&content) {
                 return Some(id);
             }
-        }
-    }
-
-    let root_build = root.join("build");
-    if root_build.exists() {
-        if let Some(id) =
-            scan_file_named(&root_build, "output-metadata.json", 6, &parse_output_metadata)
-        {
-            return Some(id);
         }
     }
 
     None
 }
 
-fn find_application_id_in_intermediates(root: &Path) -> Option<String> {
-    let intermediate_dirs = [
-        root.join("app/build/intermediates/merged_manifests"),
-        root.join("app/build/intermediates/packaged_manifests"),
-        root.join("build/intermediates/merged_manifests"),
-        root.join("build/intermediates/packaged_manifests"),
-    ];
+fn collect_metadata_files_recursive(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    results: &mut Vec<PathBuf>,
+) {
+    if depth > max_depth || !dir.is_dir() {
+        return;
+    }
 
-    for dir in &intermediate_dirs {
-        if dir.exists() {
-            if let Some(pkg) =
-                scan_file_named(dir, "AndroidManifest.xml", 5, &parse_manifest_package_name)
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if entry.file_name() == "output-metadata.json" {
+                results.push(path);
+            }
+        } else if path.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || name_str == "target"
+                || name_str == "node_modules"
+                || name_str == "intermediates"
+                || name_str == "tmp"
+                || name_str == "kotlin"
+                || name_str == "generated"
             {
+                continue;
+            }
+            collect_metadata_files_recursive(&path, depth + 1, max_depth, results);
+        }
+    }
+}
+
+fn find_application_id_in_intermediates(root: &Path) -> Option<String> {
+    let mut manifests = Vec::new();
+    collect_merged_manifests_recursive(root, 0, 7, &mut manifests);
+
+    manifests.sort_by(|a, b| {
+        let time_a = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let time_b = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        time_b.cmp(&time_a)
+    });
+
+    for manifest in manifests {
+        if let Ok(content) = std::fs::read_to_string(&manifest) {
+            if let Some(pkg) = parse_manifest_package_name(&content) {
                 return Some(pkg);
             }
         }
@@ -579,22 +837,65 @@ fn find_application_id_in_intermediates(root: &Path) -> Option<String> {
 }
 
 fn find_launcher_activity_in_intermediates(root: &Path) -> Option<String> {
-    let intermediate_dirs = [
-        root.join("app/build/intermediates/merged_manifests"),
-        root.join("build/intermediates/merged_manifests"),
-    ];
+    let mut manifests = Vec::new();
+    collect_merged_manifests_recursive(root, 0, 7, &mut manifests);
 
-    for dir in &intermediate_dirs {
-        if dir.exists() {
-            if let Some(activity) = scan_file_named(dir, "AndroidManifest.xml", 5, &|c| {
-                parse_manifest_launcher_activity(c)
-            }) {
-                return Some(activity);
+    manifests.sort_by(|a, b| {
+        let time_a = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let time_b = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        time_b.cmp(&time_a)
+    });
+
+    for manifest in manifests {
+        if let Ok(content) = std::fs::read_to_string(&manifest) {
+            if let Some(act) = parse_manifest_launcher_activity(&content) {
+                return Some(act);
             }
         }
     }
 
     None
+}
+
+fn collect_merged_manifests_recursive(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    results: &mut Vec<PathBuf>,
+) {
+    if depth > max_depth || !dir.is_dir() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if entry.file_name() == "AndroidManifest.xml" {
+                let path_str = path.to_string_lossy();
+                if path_str.contains("merged_manifests") || path_str.contains("packaged_manifests") {
+                    results.push(path);
+                }
+            }
+        } else if path.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || name_str == "target"
+                || name_str == "node_modules"
+                || name_str == "tmp"
+                || name_str == "kotlin"
+                || name_str == "generated"
+            {
+                continue;
+            }
+            collect_merged_manifests_recursive(&path, depth + 1, max_depth, results);
+        }
+    }
 }
 
 fn find_application_id_in_properties(root: &Path) -> Option<String> {
@@ -613,6 +914,11 @@ fn find_application_id_in_properties(root: &Path) -> Option<String> {
 fn find_application_id_in_source_manifests(root: &Path) -> Option<String> {
     let standard_manifests = [
         root.join("app/src/main/AndroidManifest.xml"),
+        root.join("composeApp/src/androidMain/AndroidManifest.xml"),
+        root.join("composeApp/src/main/AndroidManifest.xml"),
+        root.join("androidApp/src/androidMain/AndroidManifest.xml"),
+        root.join("androidApp/src/main/AndroidManifest.xml"),
+        root.join("src/androidMain/AndroidManifest.xml"),
         root.join("src/main/AndroidManifest.xml"),
         root.join("AndroidManifest.xml"),
     ];
@@ -667,6 +973,10 @@ fn scan_source_manifests(dir: &Path, depth: usize, max_depth: usize) -> Option<S
 
 fn find_application_id_in_gradle_files(root: &Path) -> Option<String> {
     let direct_builds = [
+        root.join("composeApp/build.gradle.kts"),
+        root.join("composeApp/build.gradle"),
+        root.join("androidApp/build.gradle.kts"),
+        root.join("androidApp/build.gradle"),
         root.join("app/build.gradle.kts"),
         root.join("app/build.gradle"),
         root.join("build.gradle.kts"),
@@ -677,8 +987,13 @@ fn find_application_id_in_gradle_files(root: &Path) -> Option<String> {
         if file.exists() {
             if let Ok(content) = std::fs::read_to_string(file) {
                 let (app_id, namespace, _) = parse_build_gradle_content(&content);
-                if let Some(id) = app_id.or(namespace) {
+                if let Some(id) = app_id {
                     return Some(id);
+                }
+                if is_android_application_gradle(&content) && !is_android_library_gradle(&content) {
+                    if let Some(ns) = namespace {
+                        return Some(ns);
+                    }
                 }
             }
         }
@@ -701,8 +1016,13 @@ fn scan_gradle_files_recursive(dir: &Path, depth: usize, max_depth: usize) -> Op
             if name_str == "build.gradle" || name_str == "build.gradle.kts" {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     let (app_id, namespace, _) = parse_build_gradle_content(&content);
-                    if let Some(id) = app_id.or(namespace) {
+                    if let Some(id) = app_id {
                         return Some(id);
+                    }
+                    if is_android_application_gradle(&content) && !is_android_library_gradle(&content) {
+                        if let Some(ns) = namespace {
+                            return Some(ns);
+                        }
                     }
                 }
             }
@@ -1153,6 +1473,111 @@ mod tests {
             project.resolve_effective_application_id(),
             Some("com.resolved.from.metadata".to_string())
         );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_multimodule_ignores_domain_library_and_picks_app_module() {
+        let temp_dir = std::env::temp_dir().join(format!("overridepulse_multimod_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. Root files
+        File::create(temp_dir.join("gradlew")).unwrap();
+        let mut settings = File::create(temp_dir.join("settings.gradle.kts")).unwrap();
+        writeln!(
+            settings,
+            r#"rootProject.name = "MultiModuleKmpApp"
+include(
+    ":auth:domain",
+    ":auth:data",
+    ":composeApp"
+)"#
+        )
+        .unwrap();
+
+        // 2. :auth:domain (Android Library Module)
+        let domain_dir = temp_dir.join("auth/domain");
+        fs::create_dir_all(&domain_dir).unwrap();
+        let mut domain_build = File::create(domain_dir.join("build.gradle.kts")).unwrap();
+        writeln!(
+            domain_build,
+            r#"plugins {{
+    alias(libs.plugins.android.library)
+}}
+android {{
+    namespace = "org.override.eje.auth.domain"
+    compileSdk = 34
+}}"#
+        )
+        .unwrap();
+
+        // 3. :auth:data (Android Library Module)
+        let data_dir = temp_dir.join("auth/data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut data_build = File::create(data_dir.join("build.gradle.kts")).unwrap();
+        writeln!(
+            data_build,
+            r#"plugins {{
+    alias(libs.plugins.androidLibrary)
+}}
+android {{
+    namespace = "org.override.eje.auth.data"
+    compileSdk = 34
+}}"#
+        )
+        .unwrap();
+
+        // 4. :composeApp (Android Application Module with KMP src/androidMain/AndroidManifest.xml)
+        let compose_dir = temp_dir.join("composeApp");
+        fs::create_dir_all(compose_dir.join("src/androidMain")).unwrap();
+        let mut compose_build = File::create(compose_dir.join("build.gradle.kts")).unwrap();
+        writeln!(
+            compose_build,
+            r#"plugins {{
+    alias(libs.plugins.android.application)
+}}
+android {{
+    namespace = "org.override.eje"
+    defaultConfig {{
+        applicationId = "org.override.eje"
+        minSdk = 24
+        targetSdk = 34
+    }}
+}}"#
+        )
+        .unwrap();
+
+        let mut manifest = File::create(compose_dir.join("src/androidMain/AndroidManifest.xml")).unwrap();
+        writeln!(
+            manifest,
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>"#
+        )
+        .unwrap();
+
+        // Test detection from root
+        let project = AndroidProject::detect(&temp_dir);
+
+        assert!(project.is_valid());
+        assert_eq!(project.name, "MultiModuleKmpApp");
+        assert_eq!(project.active_module, Some(":composeApp".to_string()));
+        assert_eq!(project.application_id, Some("org.override.eje".to_string()));
+        assert_eq!(project.namespace, Some("org.override.eje".to_string()));
+        assert_eq!(project.launcher_activity, Some(".MainActivity".to_string()));
+        assert!(project.modules.contains(&":composeApp".to_string()));
+        assert!(project.modules.contains(&":auth:domain".to_string()));
+        assert!(project.modules.contains(&":auth:data".to_string()));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
