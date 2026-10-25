@@ -8,12 +8,13 @@ use ratatui::{
 
 use crate::android::{LogEntry, LogLevel};
 use crate::app::{AppState, Panel};
+use crate::ui::simplified_view::console_parity_bar;
 use crate::ui::theme::Theme;
 
 /// Renders the `[ Live Logcat ]` stream viewer with rounded borders,
-/// PRD-defined severity color coding, application filtering, and search highlights.
+/// PRD-defined severity color coding, application filtering, search highlights, and parity indicator.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
-    let is_focused = app.current_panel == Panel::Logcat;
+    let is_focused = app.current_panel == Panel::Logcat || app.current_panel == Panel::Console;
 
     let app_filter_tag = if app.logcat_filter_by_app {
         if let Some(app_id) = &app.project.application_id {
@@ -37,8 +38,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         " [Follow: OFF]"
     };
 
+    let parity = console_parity_bar(app);
     let title = format!(
-        " Live Logcat ({}){}{}{} ",
+        " [3] Logcat ({}){}{}{} │ {parity} ",
         app.logcat_entries.len(),
         app_filter_tag,
         search_tag,

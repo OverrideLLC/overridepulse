@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::AbortHandle;
 
+use crate::android::device::DeviceAction;
 use crate::event::AppEvent;
 
 /// Represents predefined quick developer actions for Android development.
@@ -14,9 +15,9 @@ use crate::event::AppEvent;
 pub enum QuickAction {
     /// `[b]`: Builds debug APK via `./gradlew assembleDebug` and installs via `adb install -r`.
     BuildAndInstallDebug,
-    /// `[a]`: Builds bundle via `./gradlew bundleDebug`/`bundleRelease` and deploys via `bundletool`.
+    /// Builds bundle via `./gradlew bundleDebug`/`bundleRelease` and deploys via `bundletool`.
     BuildAabAndDeploy,
-    /// `[c]`: Clears application data via `adb shell pm clear <applicationId>`.
+    /// Clears application data via `adb shell pm clear <applicationId>`.
     ClearAppData,
     /// `[k]`: Terminates app process via `adb shell am force-stop <applicationId>`.
     ForceStopApp,
@@ -24,24 +25,24 @@ pub enum QuickAction {
     RelaunchActivity,
     /// `[u]`: Uninstalls the application package via `adb uninstall <applicationId>`.
     UninstallApp,
-    /// `[s]`: Spawns a detached screen mirroring session with `scrcpy -s <serial>`.
+    /// Spawns a detached screen mirroring session with `scrcpy -s <serial>`.
     LaunchScrcpy,
     /// `[g]`: Stops all running Gradle daemons (`./gradlew --stop`) and terminates active tasks.
     StopGradleDaemons,
 }
 
 impl QuickAction {
-    /// Returns the single-character keyboard shortcut for this action.
-    pub fn shortcut(&self) -> char {
+    /// Returns the single-character keyboard shortcut for this action, or `None` if menu-only.
+    pub fn shortcut(&self) -> Option<char> {
         match self {
-            Self::BuildAndInstallDebug => 'b',
-            Self::BuildAabAndDeploy => 'a',
-            Self::ClearAppData => 'c',
-            Self::ForceStopApp => 'k',
-            Self::RelaunchActivity => 'r',
-            Self::UninstallApp => 'u',
-            Self::LaunchScrcpy => 's',
-            Self::StopGradleDaemons => 'g',
+            Self::BuildAndInstallDebug => Some('b'),
+            Self::RelaunchActivity => Some('r'),
+            Self::ForceStopApp => Some('k'),
+            Self::UninstallApp => Some('u'),
+            Self::StopGradleDaemons => Some('g'),
+            Self::ClearAppData => None,
+            Self::BuildAabAndDeploy => None,
+            Self::LaunchScrcpy => None,
         }
     }
 
@@ -49,12 +50,9 @@ impl QuickAction {
     pub fn from_char(c: char) -> Option<Self> {
         match c.to_ascii_lowercase() {
             'b' => Some(Self::BuildAndInstallDebug),
-            'a' => Some(Self::BuildAabAndDeploy),
-            'c' => Some(Self::ClearAppData),
-            'k' => Some(Self::ForceStopApp),
             'r' => Some(Self::RelaunchActivity),
+            'k' => Some(Self::ForceStopApp),
             'u' => Some(Self::UninstallApp),
-            's' => Some(Self::LaunchScrcpy),
             'g' => Some(Self::StopGradleDaemons),
             _ => None,
         }
@@ -63,11 +61,11 @@ impl QuickAction {
     /// User-friendly title for UI headers and lists.
     pub fn title(&self) -> &'static str {
         match self {
-            Self::BuildAndInstallDebug => "Build & Install Debug APK",
+            Self::BuildAndInstallDebug => "Build, Install & Launch (Debug)",
             Self::BuildAabAndDeploy => "Build AAB & Deploy (Bundletool)",
-            Self::ClearAppData => "Clear App Data",
+            Self::ClearAppData => "Clear App Data (pm clear)",
             Self::ForceStopApp => "Force Stop App",
-            Self::RelaunchActivity => "Relaunch Activity",
+            Self::RelaunchActivity => "Relaunch App",
             Self::UninstallApp => "Uninstall App",
             Self::LaunchScrcpy => "Launch Scrcpy Mirror",
             Self::StopGradleDaemons => "Stop All Gradle Daemons",
@@ -90,9 +88,12 @@ impl QuickAction {
         }
     }
 
-    /// Formatted display label including shortcut badge: `"[b] Build & Install Debug APK"`.
+    /// Formatted display label including shortcut badge: `"[b] Build, Install & Launch (Debug)"`.
     pub fn display_label(&self) -> String {
-        format!("[{}] {}", self.shortcut(), self.title())
+        match self.shortcut() {
+            Some(sc) => format!("[{sc}] {}", self.title()),
+            None => format!("    {}", self.title()),
+        }
     }
 
     /// Returns a slice containing all quick actions in recommended display order.
@@ -544,11 +545,476 @@ impl ProcessRunner {
 
         self.abort_handle = Some(join_handle.abort_handle());
     }
+
+    /// Executes a device control action asynchronously.
+    pub fn execute_device_action(
+        &mut self,
+        action: DeviceAction,
+        ctx: ActionContext,
+        sender: UnboundedSender<AppEvent>,
+    ) {
+        self.abort();
+
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        self.cancel_tx = Some(cancel_tx);
+
+        let join_handle = tokio::spawn(async move {
+            let mut cancel_opt = Some(cancel_rx);
+            execute_device_action_internal(action, &ctx, &sender, &mut cancel_opt).await;
+        });
+
+        self.abort_handle = Some(join_handle.abort_handle());
+    }
+
+    /// Connects to a wireless ADB device, pairing beforehand if pairing address and code are provided.
+    pub fn execute_adb_pair_and_connect(
+        &mut self,
+        adb_path: PathBuf,
+        pair_addr: Option<String>,
+        pair_code: Option<String>,
+        connect_addr: String,
+        sender: UnboundedSender<AppEvent>,
+    ) {
+        self.abort();
+
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        self.cancel_tx = Some(cancel_tx);
+
+        let join_handle = tokio::spawn(async move {
+            let mut cancel_opt = Some(cancel_rx);
+
+            if let (Some(addr), Some(code)) = (pair_addr, pair_code) {
+                if !addr.trim().is_empty() && !code.trim().is_empty() {
+                    let _ = sender.send(AppEvent::ProcessOutput(format!(
+                        "Pairing with {addr} using provided code..."
+                    )));
+                    let mut pair_cmd = Command::new(&adb_path);
+                    pair_cmd.args(["pair", addr.trim(), code.trim()]);
+                    match run_streaming_cmd(pair_cmd, "adb pair", &sender, &mut cancel_opt).await {
+                        Ok(true) => {
+                            let _ = sender.send(AppEvent::ProcessOutput(
+                                "Pairing succeeded! Proceeding to connect...".to_string(),
+                            ));
+                        }
+                        Ok(false) => {
+                            let _ = sender.send(AppEvent::ProcessFinished(
+                                false,
+                                "ADB pairing failed".to_string(),
+                            ));
+                            return;
+                        }
+                        Err(e) => {
+                            let _ = sender.send(AppEvent::ProcessFinished(
+                                false,
+                                format!("ADB pair execution error: {e}"),
+                            ));
+                            return;
+                        }
+                    }
+                }
+            }
+
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Connecting to {connect_addr}..."
+            )));
+            let mut conn_cmd = Command::new(&adb_path);
+            conn_cmd.args(["connect", connect_addr.trim()]);
+            match run_streaming_cmd(conn_cmd, "adb connect", &sender, &mut cancel_opt).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Connected to {connect_addr} successfully"),
+                    ));
+                }
+                Ok(false) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("Failed to connect to {connect_addr}"),
+                    ));
+                }
+                Err(e) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("ADB connect execution error: {e}"),
+                    ));
+                }
+            }
+        });
+
+        self.abort_handle = Some(join_handle.abort_handle());
+    }
 }
 
 impl Drop for ProcessRunner {
     fn drop(&mut self) {
         self.abort();
+    }
+}
+
+/// Helper to resolve `applicationId` from context or scan project outputs and manifests.
+pub fn resolve_or_extract_app_id(ctx: &ActionContext) -> Option<String> {
+    if let Some(ref id) = ctx.application_id {
+        if !id.trim().is_empty() {
+            return Some(id.clone());
+        }
+    }
+    crate::android::project::extract_application_id_from_path(&ctx.project_root)
+}
+
+async fn execute_device_action_internal(
+    action: DeviceAction,
+    ctx: &ActionContext,
+    sender: &UnboundedSender<AppEvent>,
+    cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+) {
+    let serial = &ctx.serial;
+    let adb = &ctx.adb_path;
+
+    match action {
+        DeviceAction::WirelessPairAndConnect => {
+            let _ = sender.send(AppEvent::ProcessOutput(
+                "Wireless ADB: Use the Pair & Connect modal or enter device IP/Port and pairing code.".to_string(),
+            ));
+            let _ = sender.send(AppEvent::ProcessFinished(
+                true,
+                "Wireless Pair & Connect dialog ready".to_string(),
+            ));
+        }
+        DeviceAction::EnableTcpip5555 => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Enabling ADB over TCP/IP port 5555 on device '{serial}'..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args(["-s", serial, "tcpip", "5555"]);
+            match run_streaming_cmd(cmd, "adb tcpip 5555", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        "ADB TCP/IP 5555 enabled successfully. You can now connect via Wi-Fi.".to_string(),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to enable ADB TCP/IP 5555".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::ToggleWifi => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Checking Wi-Fi status on device '{serial}'..."
+            )));
+            let status_cmd = Command::new(adb)
+                .args(["-s", serial, "shell", "cmd", "wifi", "status"])
+                .output()
+                .await;
+            let is_enabled = match status_cmd {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                    stdout.contains("enabled")
+                }
+                _ => false,
+            };
+
+            let (arg, next_state) = if is_enabled {
+                ("disable", "OFF")
+            } else {
+                ("enable", "ON")
+            };
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Toggling Wi-Fi to {next_state}..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args(["-s", serial, "shell", "svc", "wifi", arg]);
+            match run_streaming_cmd(cmd, "svc wifi toggle", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Device Wi-Fi toggled {next_state}"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to toggle Wi-Fi".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::ToggleMobileData => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Checking mobile data setting on device '{serial}'..."
+            )));
+            let get_cmd = Command::new(adb)
+                .args(["-s", serial, "shell", "settings", "get", "global", "mobile_data"])
+                .output()
+                .await;
+            let current = get_cmd
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            let (arg, next_state) = if current == "1" {
+                ("disable", "OFF")
+            } else {
+                ("enable", "ON")
+            };
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Toggling Mobile Data to {next_state}..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args(["-s", serial, "shell", "svc", "data", arg]);
+            match run_streaming_cmd(cmd, "svc data toggle", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Mobile Data toggled {next_state}"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to toggle mobile data".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::ToggleStayAwake => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Checking stay awake setting on device '{serial}'..."
+            )));
+            let get_cmd = Command::new(adb)
+                .args([
+                    "-s",
+                    serial,
+                    "shell",
+                    "settings",
+                    "get",
+                    "global",
+                    "stay_on_while_plugged_in",
+                ])
+                .output()
+                .await;
+            let current = get_cmd
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            let (new_val, label) = if current == "0" || current.is_empty() {
+                ("7", "ENABLED (while plugged)")
+            } else {
+                ("0", "DISABLED")
+            };
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Setting Stay Awake to {label}..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args([
+                "-s",
+                serial,
+                "shell",
+                "settings",
+                "put",
+                "global",
+                "stay_on_while_plugged_in",
+                new_val,
+            ]);
+            match run_streaming_cmd(cmd, "settings stay_on", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Stay awake set to {label}"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to toggle stay awake".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::ToggleDarkMode => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Checking night mode on device '{serial}'..."
+            )));
+            let get_cmd = Command::new(adb)
+                .args(["-s", serial, "shell", "cmd", "uimode", "night"])
+                .output()
+                .await;
+            let is_night = match get_cmd {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                    stdout.contains("yes")
+                }
+                _ => false,
+            };
+            let (arg, label) = if is_night {
+                ("no", "LIGHT")
+            } else {
+                ("yes", "DARK")
+            };
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Setting system UI theme to {label}..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args(["-s", serial, "shell", "cmd", "uimode", "night", arg]);
+            match run_streaming_cmd(cmd, "cmd uimode night", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Dark mode switched to {label}"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to toggle dark mode".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::ToggleShowTaps => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Checking show taps setting on device '{serial}'..."
+            )));
+            let get_cmd = Command::new(adb)
+                .args(["-s", serial, "shell", "settings", "get", "system", "show_touches"])
+                .output()
+                .await;
+            let current = get_cmd
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            let (val, label) = if current == "1" {
+                ("0", "OFF")
+            } else {
+                ("1", "ON")
+            };
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Setting show screen touches to {label}..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args([
+                "-s",
+                serial,
+                "shell",
+                "settings",
+                "put",
+                "system",
+                "show_touches",
+                val,
+            ]);
+            match run_streaming_cmd(cmd, "show_touches toggle", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Show taps toggled {label}"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to toggle show taps".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::OpenWirelessDebuggingSettings => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Opening Developer & Wireless Debugging Settings on device '{serial}'..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args([
+                "-s",
+                serial,
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+            ]);
+            match run_streaming_cmd(cmd, "open dev settings", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        "Developer settings opened on device".to_string(),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to open settings".to_string(),
+                    ));
+                }
+            }
+        }
+        DeviceAction::TakeScreenshot => {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let filename = format!("screenshot_{timestamp}.png");
+            let target_path = ctx.project_root.join(&filename);
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Capturing screenshot from device '{serial}' to {}...",
+                target_path.display()
+            )));
+
+            let output = Command::new(adb)
+                .args(["-s", serial, "exec-out", "screencap", "-p"])
+                .output()
+                .await;
+
+            match output {
+                Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+                    match std::fs::write(&target_path, &out.stdout) {
+                        Ok(()) => {
+                            let _ = sender.send(AppEvent::ProcessFinished(
+                                true,
+                                format!("Screenshot saved to {filename}"),
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = sender.send(AppEvent::ProcessFinished(
+                                false,
+                                format!("Failed to save screenshot file: {e}"),
+                            ));
+                        }
+                    }
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("screencap failed: {err}"),
+                    ));
+                }
+                Err(e) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("ADB screencap invocation error: {e}"),
+                    ));
+                }
+            }
+        }
+        DeviceAction::RebootDevice => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Rebooting device '{serial}' via ADB..."
+            )));
+            let mut cmd = Command::new(adb);
+            cmd.args(["-s", serial, "reboot"]);
+            match run_streaming_cmd(cmd, "adb reboot", sender, cancel_rx).await {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        format!("Device '{serial}' is rebooting"),
+                    ));
+                }
+                _ => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("Failed to reboot device '{serial}'"),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -622,16 +1088,67 @@ async fn execute_build_and_install_debug(
 
     match run_streaming_cmd(adb_cmd, "ADB install", sender, cancel_rx).await {
         Ok(true) => {
-            let _ = sender.send(AppEvent::ProcessFinished(
-                true,
-                format!(
-                    "Successfully installed {}",
-                    apk_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("APK")
-                ),
-            ));
+            let effective_app_id = resolve_or_extract_app_id(ctx);
+            if let Some(app_id) = effective_app_id {
+                let _ = sender.send(AppEvent::ProcessOutput(format!(
+                    "🚀 Launching application '{app_id}' on device..."
+                )));
+                let mut launched = false;
+                if let Some(activity) = &ctx.main_activity {
+                    let component = if activity.starts_with('.') || activity.contains('/') {
+                        format!("{app_id}/{activity}")
+                    } else {
+                        format!("{app_id}/.{activity}")
+                    };
+                    let mut start_cmd = Command::new(&ctx.adb_path);
+                    start_cmd.args([
+                        "-s",
+                        &ctx.serial,
+                        "shell",
+                        "am",
+                        "start",
+                        "-W",
+                        "-n",
+                        &component,
+                    ]);
+                    if let Ok(true) =
+                        run_streaming_cmd(start_cmd, "am start", sender, cancel_rx).await
+                    {
+                        launched = true;
+                    }
+                }
+                if !launched {
+                    let mut monkey_cmd = Command::new(&ctx.adb_path);
+                    monkey_cmd.args([
+                        "-s",
+                        &ctx.serial,
+                        "shell",
+                        "monkey",
+                        "-p",
+                        &app_id,
+                        "-c",
+                        "android.intent.category.LAUNCHER",
+                        "1",
+                    ]);
+                    let _ =
+                        run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
+                }
+                let _ = sender.send(AppEvent::ProcessFinished(
+                    true,
+                    format!("Installed & launched '{app_id}'"),
+                ));
+            } else {
+                let _ = sender.send(AppEvent::ProcessFinished(
+                    true,
+                    format!(
+                        "Successfully installed {}",
+                        apk_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("APK")
+                    ),
+                ));
+            }
         }
         Ok(false) => {
             let _ = sender.send(AppEvent::ProcessFinished(
@@ -790,10 +1307,61 @@ async fn execute_build_aab_and_deploy(
 
     match install_res {
         Ok(true) => {
-            let _ = sender.send(AppEvent::ProcessFinished(
-                true,
-                "AAB deployed and installed successfully via bundletool".to_string(),
-            ));
+            let effective_app_id = resolve_or_extract_app_id(ctx);
+            if let Some(app_id) = effective_app_id {
+                let _ = sender.send(AppEvent::ProcessOutput(format!(
+                    "🚀 Launching application '{app_id}' on device..."
+                )));
+                let mut launched = false;
+                if let Some(activity) = &ctx.main_activity {
+                    let component = if activity.starts_with('.') || activity.contains('/') {
+                        format!("{app_id}/{activity}")
+                    } else {
+                        format!("{app_id}/.{activity}")
+                    };
+                    let mut start_cmd = Command::new(&ctx.adb_path);
+                    start_cmd.args([
+                        "-s",
+                        &ctx.serial,
+                        "shell",
+                        "am",
+                        "start",
+                        "-W",
+                        "-n",
+                        &component,
+                    ]);
+                    if let Ok(true) =
+                        run_streaming_cmd(start_cmd, "am start", sender, cancel_rx).await
+                    {
+                        launched = true;
+                    }
+                }
+                if !launched {
+                    let mut monkey_cmd = Command::new(&ctx.adb_path);
+                    monkey_cmd.args([
+                        "-s",
+                        &ctx.serial,
+                        "shell",
+                        "monkey",
+                        "-p",
+                        &app_id,
+                        "-c",
+                        "android.intent.category.LAUNCHER",
+                        "1",
+                    ]);
+                    let _ =
+                        run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
+                }
+                let _ = sender.send(AppEvent::ProcessFinished(
+                    true,
+                    format!("Installed & launched '{app_id}'"),
+                ));
+            } else {
+                let _ = sender.send(AppEvent::ProcessFinished(
+                    true,
+                    "AAB deployed and installed successfully via bundletool".to_string(),
+                ));
+            }
         }
         Ok(false) => {
             let _ = sender.send(AppEvent::ProcessFinished(
@@ -818,8 +1386,8 @@ async fn execute_clear_app_data(
     sender: &UnboundedSender<AppEvent>,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
-    let app_id = match &ctx.application_id {
-        Some(id) if !id.trim().is_empty() => id.as_str(),
+    let app_id_owned = match resolve_or_extract_app_id(ctx) {
+        Some(id) if !id.trim().is_empty() => id,
         _ => {
             let _ = sender.send(AppEvent::ProcessOutput(
                 "Error: No applicationId detected or specified for project.".to_string(),
@@ -831,6 +1399,7 @@ async fn execute_clear_app_data(
             return;
         }
     };
+    let app_id = app_id_owned.as_str();
 
     let _ = sender.send(AppEvent::ProcessOutput(format!(
         "Clearing app data for '{app_id}' on device {}...",
@@ -868,8 +1437,8 @@ async fn execute_force_stop(
     sender: &UnboundedSender<AppEvent>,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
-    let app_id = match &ctx.application_id {
-        Some(id) if !id.trim().is_empty() => id.as_str(),
+    let app_id_owned = match resolve_or_extract_app_id(ctx) {
+        Some(id) if !id.trim().is_empty() => id,
         _ => {
             let _ = sender.send(AppEvent::ProcessOutput(
                 "Error: No applicationId detected or specified for project.".to_string(),
@@ -881,6 +1450,7 @@ async fn execute_force_stop(
             return;
         }
     };
+    let app_id = app_id_owned.as_str();
 
     let _ = sender.send(AppEvent::ProcessOutput(format!(
         "Force stopping '{app_id}' on device {}...",
@@ -918,8 +1488,8 @@ async fn execute_relaunch_activity(
     sender: &UnboundedSender<AppEvent>,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
-    let app_id = match &ctx.application_id {
-        Some(id) if !id.trim().is_empty() => id.as_str(),
+    let app_id_owned = match resolve_or_extract_app_id(ctx) {
+        Some(id) if !id.trim().is_empty() => id,
         _ => {
             let _ = sender.send(AppEvent::ProcessOutput(
                 "Error: No applicationId detected or specified for project.".to_string(),
@@ -931,6 +1501,7 @@ async fn execute_relaunch_activity(
             return;
         }
     };
+    let app_id = app_id_owned.as_str();
 
     let _ = sender.send(AppEvent::ProcessOutput(format!(
         "Stopping application '{app_id}'..."
@@ -1003,8 +1574,8 @@ async fn execute_uninstall(
     sender: &UnboundedSender<AppEvent>,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
-    let app_id = match &ctx.application_id {
-        Some(id) if !id.trim().is_empty() => id.as_str(),
+    let app_id_owned = match resolve_or_extract_app_id(ctx) {
+        Some(id) if !id.trim().is_empty() => id,
         _ => {
             let _ = sender.send(AppEvent::ProcessOutput(
                 "Error: No applicationId detected or specified for project.".to_string(),
@@ -1016,6 +1587,7 @@ async fn execute_uninstall(
             return;
         }
     };
+    let app_id = app_id_owned.as_str();
 
     let _ = sender.send(AppEvent::ProcessOutput(format!(
         "Uninstalling '{app_id}' from device {}...",
@@ -1121,14 +1693,14 @@ mod tests {
 
     #[test]
     fn test_quick_action_metadata() {
-        assert_eq!(QuickAction::BuildAndInstallDebug.shortcut(), 'b');
-        assert_eq!(QuickAction::BuildAabAndDeploy.shortcut(), 'a');
-        assert_eq!(QuickAction::ClearAppData.shortcut(), 'c');
-        assert_eq!(QuickAction::ForceStopApp.shortcut(), 'k');
-        assert_eq!(QuickAction::RelaunchActivity.shortcut(), 'r');
-        assert_eq!(QuickAction::UninstallApp.shortcut(), 'u');
-        assert_eq!(QuickAction::LaunchScrcpy.shortcut(), 's');
-        assert_eq!(QuickAction::StopGradleDaemons.shortcut(), 'g');
+        assert_eq!(QuickAction::BuildAndInstallDebug.shortcut(), Some('b'));
+        assert_eq!(QuickAction::BuildAabAndDeploy.shortcut(), None);
+        assert_eq!(QuickAction::ClearAppData.shortcut(), None);
+        assert_eq!(QuickAction::ForceStopApp.shortcut(), Some('k'));
+        assert_eq!(QuickAction::RelaunchActivity.shortcut(), Some('r'));
+        assert_eq!(QuickAction::UninstallApp.shortcut(), Some('u'));
+        assert_eq!(QuickAction::LaunchScrcpy.shortcut(), None);
+        assert_eq!(QuickAction::StopGradleDaemons.shortcut(), Some('g'));
 
         assert_eq!(
             QuickAction::from_char('b'),
@@ -1138,18 +1710,15 @@ mod tests {
             QuickAction::from_char('B'),
             Some(QuickAction::BuildAndInstallDebug)
         );
-        assert_eq!(
-            QuickAction::from_char('a'),
-            Some(QuickAction::BuildAabAndDeploy)
-        );
-        assert_eq!(QuickAction::from_char('c'), Some(QuickAction::ClearAppData));
+        assert_eq!(QuickAction::from_char('a'), None);
+        assert_eq!(QuickAction::from_char('c'), None);
         assert_eq!(QuickAction::from_char('k'), Some(QuickAction::ForceStopApp));
         assert_eq!(
             QuickAction::from_char('r'),
             Some(QuickAction::RelaunchActivity)
         );
         assert_eq!(QuickAction::from_char('u'), Some(QuickAction::UninstallApp));
-        assert_eq!(QuickAction::from_char('s'), Some(QuickAction::LaunchScrcpy));
+        assert_eq!(QuickAction::from_char('s'), None);
         assert_eq!(
             QuickAction::from_char('g'),
             Some(QuickAction::StopGradleDaemons)
@@ -1161,6 +1730,8 @@ mod tests {
         assert_eq!(QuickAction::from_char('z'), None);
 
         assert_eq!(QuickAction::all().len(), 8);
+        assert!(QuickAction::BuildAndInstallDebug.display_label().starts_with("[b] "));
+        assert!(QuickAction::ClearAppData.display_label().starts_with("    "));
     }
 
     #[test]
@@ -1317,5 +1888,15 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_or_extract_app_id_priority() {
+        let mut ctx = ActionContext::new("/tmp/some_dir", "emulator-5554");
+        ctx.application_id = Some("com.explicit.appid".to_string());
+        assert_eq!(
+            resolve_or_extract_app_id(&ctx),
+            Some("com.explicit.appid".to_string())
+        );
     }
 }

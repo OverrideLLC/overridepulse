@@ -1,7 +1,9 @@
 pub mod action_deck;
 pub mod components;
+pub mod device_controls;
 pub mod device_panel;
 pub mod logcat_view;
+pub mod simplified_view;
 pub mod terminal_log;
 pub mod theme;
 
@@ -10,35 +12,33 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, ViewMode};
+use crate::app::AppState;
 
 /// Renders the complete application user interface on the given Ratatui frame,
-/// following the PRD Sections 2, 5, and 6 layout specifications:
-/// - Top header
-/// - Body top row (Horizontal split 50%/50%: Devices panel / Quick Actions deck)
-/// - Body bottom row (Build Output terminal / Live Logcat stream)
-/// - Bottom footer
-/// - Modals / Overlays: Project selector, Help, and Search
+/// according to the v0.2.0-B UI/UX specifications:
+/// - No top header bar (project metadata and variant integrated into bottom footer)
+/// - Main body top row (3 columns: Devices 30% / Device Controls 35% / Actions Deck 35%)
+/// - Main body bottom row (Configurable multi-pane console with parity: Simplified / Build / Logcat)
+/// - Bottom footer (left shortcuts + right project & variant badge)
+/// - Modal overlays: Project selector, ADB Pair & Connect modal, Help, and Search
 pub fn render(frame: &mut Frame, app: &AppState) {
     let size = frame.area();
 
-    // Main vertical layout: Header, Body, Footer
+    // Main vertical layout: Body and Footer (No top header)
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header superior
-            Constraint::Min(5),    // Cuerpo
+            Constraint::Min(8),    // Cuerpo principal
             Constraint::Length(3), // Footer inferior
         ])
         .split(size);
 
-    let header_area = vertical_chunks[0];
-    let body_area = vertical_chunks[1];
-    let footer_area = vertical_chunks[2];
+    let body_area = vertical_chunks[0];
+    let footer_area = vertical_chunks[1];
 
     // Split body vertically into:
-    // - Fila superior: Devices panel (left 50%) and Action deck (right 50%)
-    // - Fila inferior: Terminal log or Live Logcat
+    // - Fila superior (42%): 3 compact panels (Devices, ADB Controls, Action Deck)
+    // - Fila inferior (58%): Multi-view parity console (Simplified, Build Log, Logcat)
     let body_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -50,34 +50,104 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     let top_row_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50), // Izquierda: device_panel
-            Constraint::Percentage(50), // Derecha: action_deck
+            Constraint::Percentage(30), // Columna 1: Connected Devices + [w] Wi-Fi ADB
+            Constraint::Percentage(35), // Columna 2: Device Controls (ADB)
+            Constraint::Percentage(35), // Columna 3: App & Gradle Actions
         ])
         .split(body_rows[0]);
 
     let devices_area = top_row_cols[0];
-    let actions_area = top_row_cols[1];
+    let device_controls_area = top_row_cols[1];
+    let actions_area = top_row_cols[2];
     let bottom_area = body_rows[1];
 
-    // 1. Render Header
-    components::header::render(frame, app, header_area);
-
-    // 2. Render Fila superior del cuerpo
+    // 1. Render Fila superior del cuerpo (3 columnas compactas)
     device_panel::render(frame, app, devices_area);
+    device_controls::render(frame, app, device_controls_area);
     action_deck::render(frame, app, actions_area);
 
-    // 3. Render Fila inferior del cuerpo
-    match app.view_mode {
-        ViewMode::BuildOutput => terminal_log::render(frame, app, bottom_area),
-        ViewMode::LogcatView => logcat_view::render(frame, app, bottom_area),
+    // 2. Render Fila inferior del cuerpo (Consola Multi-Vista con Paridad)
+    let active_simplified = app.show_simplified_pane;
+    let active_build = app.show_build_pane;
+    let active_logcat = app.show_logcat_pane;
+
+    match (active_simplified, active_build, active_logcat) {
+        // Triple view: All 3 active
+        (true, true, true) => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(28), // Simplified Status
+                    Constraint::Percentage(36), // Build Output
+                    Constraint::Percentage(36), // Live Logcat
+                ])
+                .split(bottom_area);
+            simplified_view::render(frame, app, cols[0]);
+            terminal_log::render(frame, app, cols[1]);
+            logcat_view::render(frame, app, cols[2]);
+        }
+        // Dual view: Simplified + Logcat
+        (true, false, true) => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35), // Simplified Status
+                    Constraint::Percentage(65), // Live Logcat
+                ])
+                .split(bottom_area);
+            simplified_view::render(frame, app, cols[0]);
+            logcat_view::render(frame, app, cols[1]);
+        }
+        // Dual view: Simplified + Build
+        (true, true, false) => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(35), // Simplified Status
+                    Constraint::Percentage(65), // Build Output
+                ])
+                .split(bottom_area);
+            simplified_view::render(frame, app, cols[0]);
+            terminal_log::render(frame, app, cols[1]);
+        }
+        // Dual view: Build + Logcat
+        (false, true, true) => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50), // Build Output
+                    Constraint::Percentage(50), // Live Logcat
+                ])
+                .split(bottom_area);
+            terminal_log::render(frame, app, cols[0]);
+            logcat_view::render(frame, app, cols[1]);
+        }
+        // Single view: Simplified only
+        (true, false, false) => {
+            simplified_view::render(frame, app, bottom_area);
+        }
+        // Single view: Build only
+        (false, true, false) => {
+            terminal_log::render(frame, app, bottom_area);
+        }
+        // Single view: Logcat only
+        (false, false, true) => {
+            logcat_view::render(frame, app, bottom_area);
+        }
+        // Fallback: Default to Simplified
+        (false, false, false) => {
+            simplified_view::render(frame, app, bottom_area);
+        }
     }
 
-    // 4. Render Footer
+    // 3. Render Footer (Shortcuts + Project & Variant status)
     components::footer::render(frame, app, footer_area);
 
-    // 5. Overlays (Priority: Project Selector > Help > Search)
+    // 4. Overlays (Priority: Project Selector > ADB Connect Modal > Help > Search)
     if app.project_selector_active {
         components::project_selector::render(frame, app, size);
+    } else if app.adb_connect_modal_active {
+        components::adb_connect_modal::render(frame, app, size);
     } else if app.help_active {
         components::help::render(frame, size);
     } else if app.search_active {
@@ -107,13 +177,52 @@ mod tests {
     }
 
     #[test]
+    fn test_render_parity_multi_pane() {
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+
+        // 1. Triple view
+        app.show_simplified_pane = true;
+        app.show_build_pane = true;
+        app.show_logcat_pane = true;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        // 2. Simplified + Build
+        app.show_simplified_pane = true;
+        app.show_build_pane = true;
+        app.show_logcat_pane = false;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        // 3. Simplified + Logcat
+        app.show_simplified_pane = true;
+        app.show_build_pane = false;
+        app.show_logcat_pane = true;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        // 4. Build + Logcat
+        app.show_simplified_pane = false;
+        app.show_build_pane = true;
+        app.show_logcat_pane = true;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        // 5. Simplified only
+        app.show_simplified_pane = true;
+        app.show_build_pane = false;
+        app.show_logcat_pane = false;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+    }
+
+    #[test]
     fn test_render_logcat_view() {
         let backend = TestBackend::new(120, 35);
         let mut terminal = Terminal::new(backend).unwrap();
 
         let mut app = AppState::new(PathBuf::from("."));
         app.project_selector_active = false;
-        app.view_mode = ViewMode::LogcatView;
+        app.show_logcat_pane = true;
         app.append_logcat_entry(LogEntry {
             raw: "10-23 12:00:00.000 1234 5678 D TestTag: Debug message".to_string(),
             timestamp: Some("10-23 12:00:00.000".to_string()),
@@ -175,12 +284,17 @@ mod tests {
         ];
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
 
-        // 2. Help overlay
+        // 2. ADB Connect modal overlay
         app.project_selector_active = false;
+        app.adb_connect_modal_active = true;
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        // 3. Help overlay
+        app.adb_connect_modal_active = false;
         app.help_active = true;
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
 
-        // 3. Search overlay
+        // 4. Search overlay
         app.help_active = false;
         app.search_active = true;
         app.search_query = "MainActivity".to_string();

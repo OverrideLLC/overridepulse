@@ -7,12 +7,13 @@ use ratatui::{
 };
 
 use crate::app::{AppState, Panel};
+use crate::ui::simplified_view::console_parity_bar;
 use crate::ui::theme::Theme;
 
 /// Renders the `[ Build & Process Output ]` panel with rounded borders,
-/// dynamic Gradle progress bar, and syntax highlighting.
+/// dynamic Gradle progress bar, syntax highlighting, and parity indicator.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
-    let is_focused = app.current_panel == Panel::Output;
+    let is_focused = app.current_panel == Panel::Output || app.current_panel == Panel::Console;
 
     let auto_scroll_tag = if app.auto_scroll_console {
         " [Follow: ON]"
@@ -20,8 +21,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         " [Follow: OFF]"
     };
 
+    let parity = console_parity_bar(app);
     let title = format!(
-        " Build & Process Output ({}){} ",
+        " [2] Build Output ({}){} │ {parity} ",
         app.console_output.len(),
         auto_scroll_tag
     );

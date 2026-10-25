@@ -409,7 +409,7 @@ impl LogcatStream {
         }
     }
 
-    /// Starts streaming logcat from `adb -s <serial> logcat -v threadtime`.
+    /// Starts streaming logcat strictly filtered for the project's application package.
     pub fn start(
         &mut self,
         serial: impl Into<String>,
@@ -424,78 +424,126 @@ impl LogcatStream {
         self.package_name = package_name.clone();
         self.filter_by_app.store(filter_by_app, Ordering::SeqCst);
 
-        let filter_flag = Arc::clone(&self.filter_by_app);
         let task_serial = serial.clone();
         let task_pkg = package_name.clone();
 
         let join_handle = tokio::spawn(async move {
-            let mut resolved_pid = if let Some(ref pkg) = task_pkg {
-                Self::resolve_pid(&task_serial, pkg).await
-            } else {
-                None
-            };
-
-            let mut cmd = Command::new("adb");
-            cmd.args(["-s", &task_serial, "logcat", "-v", "threadtime"]);
-            cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::null());
-            cmd.kill_on_drop(true);
-
-            let mut child = match cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = sender.send(AppEvent::ProcessOutput(format!(
-                        "Failed to spawn adb logcat: {e}"
-                    )));
-                    return;
+            let pkg = match task_pkg {
+                Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+                _ => {
+                    let entry = LogEntry {
+                        raw: "No applicationId detected yet. Build the app first to stream its Logcat.".to_string(),
+                        timestamp: None,
+                        pid: None,
+                        tid: None,
+                        level: LogLevel::Info,
+                        tag: "OverridePulse".to_string(),
+                        message: "No applicationId detected yet. Build the app first to stream its Logcat.".to_string(),
+                    };
+                    let _ = sender.send(AppEvent::LogcatLine(entry));
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
                 }
             };
 
-            if let Some(stdout) = child.stdout.take() {
-                let mut reader = BufReader::new(stdout).lines();
-                let mut last_pid_check = std::time::Instant::now();
-
-                while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(entry) = LogEntry::parse_line(&line) {
-                        let is_filtering = filter_flag.load(Ordering::Relaxed);
-
-                        // Periodically retry resolving PID if we don't have it yet and filtering is desired
-                        if is_filtering
-                            && resolved_pid.is_none()
-                            && task_pkg.is_some()
-                            && last_pid_check.elapsed() >= std::time::Duration::from_secs(2)
-                        {
-                            last_pid_check = std::time::Instant::now();
-                            if let Some(ref pkg) = task_pkg {
-                                resolved_pid = Self::resolve_pid(&task_serial, pkg).await;
-                            }
-                        }
-
-                        let matches = if is_filtering {
-                            if let Some(pid) = resolved_pid {
-                                entry.pid == Some(pid)
-                                    || (entry.pid.is_none()
-                                        && task_pkg
-                                            .as_deref()
-                                            .is_some_and(|pkg| entry.raw.contains(pkg)))
-                            } else if let Some(ref pkg) = task_pkg {
-                                // App not running yet: allow lines mentioning package or tag
-                                entry.raw.contains(pkg) || entry.tag.contains(pkg)
-                            } else {
-                                true
-                            }
-                        } else {
-                            true
+            let mut waiting_emitted = false;
+            loop {
+                // 1. Wait until resolving PID
+                let mut pid = Self::resolve_pid(&task_serial, &pkg).await;
+                while pid.is_none() {
+                    if !waiting_emitted {
+                        let info = LogEntry {
+                            raw: format!("Waiting for process '{pkg}' to start on device..."),
+                            timestamp: None,
+                            pid: None,
+                            tid: None,
+                            level: LogLevel::Info,
+                            tag: "OverridePulse".to_string(),
+                            message: format!("Waiting for process '{pkg}' to start on device..."),
                         };
+                        if sender.send(AppEvent::LogcatLine(info)).is_err() {
+                            return;
+                        }
+                        waiting_emitted = true;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    pid = Self::resolve_pid(&task_serial, &pkg).await;
+                }
 
-                        if matches && sender.send(AppEvent::LogcatLine(entry)).is_err() {
-                            break;
+                let current_pid = match pid {
+                    Some(p) => p,
+                    None => continue,
+                };
+                waiting_emitted = false;
+
+                // 2. Stream logcat exclusively for this PID
+                let mut cmd = Command::new("adb");
+                cmd.args([
+                    "-s",
+                    &task_serial,
+                    "logcat",
+                    "-v",
+                    "threadtime",
+                    "-T",
+                    "100",
+                    &format!("--pid={current_pid}"),
+                ]);
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::null());
+                cmd.kill_on_drop(true);
+
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = sender.send(AppEvent::ProcessOutput(format!(
+                            "Failed to spawn adb logcat: {e}"
+                        )));
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        continue;
+                    }
+                };
+
+                if let Some(stdout) = child.stdout.take() {
+                    let mut reader = BufReader::new(stdout).lines();
+                    let mut pid_check_interval =
+                        tokio::time::interval(tokio::time::Duration::from_millis(1500));
+                    pid_check_interval.tick().await;
+
+                    loop {
+                        tokio::select! {
+                            line_res = reader.next_line() => {
+                                match line_res {
+                                    Ok(Some(line)) => {
+                                        if let Some(entry) = LogEntry::parse_line(&line) {
+                                            if sender.send(AppEvent::LogcatLine(entry)).is_err() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = pid_check_interval.tick() => {
+                                let active_pid = Self::resolve_pid(&task_serial, &pkg).await;
+                                if active_pid != Some(current_pid) {
+                                    let _ = child.kill().await;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            let _ = child.wait().await;
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
         });
 
         self.abort_handle = Some(join_handle.abort_handle());

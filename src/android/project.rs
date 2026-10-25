@@ -28,6 +28,23 @@ impl AndroidProject {
         self.is_valid_android_project
     }
 
+    /// Resolves the effective `applicationId` using in-memory config,
+    /// falling back to scanning `output-metadata.json`, merged manifests,
+    /// and project Gradle files if not explicitly cached.
+    pub fn resolve_effective_application_id(&self) -> Option<String> {
+        if let Some(ref id) = self.application_id {
+            if !id.trim().is_empty() {
+                return Some(id.clone());
+            }
+        }
+        if let Some(ref ns) = self.namespace {
+            if !ns.trim().is_empty() {
+                return Some(ns.clone());
+            }
+        }
+        extract_application_id_from_path(&self.root_path)
+    }
+
     /// Detects an Android project by inspecting `start_path` and its ancestors.
     ///
     /// Searches upward for Gradle wrapper or settings/build files. If found,
@@ -109,6 +126,16 @@ impl AndroidProject {
             namespace = app_id.clone();
         }
 
+        // Exhaustive fallback scanning of output-metadata.json, merged manifests, properties, and all gradle files
+        if app_id.is_none() {
+            if let Some(extracted) = extract_application_id_from_path(&root) {
+                app_id = Some(extracted.clone());
+                if namespace.is_none() {
+                    namespace = Some(extracted);
+                }
+            }
+        }
+
         // Active variant selection
         let active_variant = if variants.contains(&"debug".to_string()) {
             "debug".to_string()
@@ -121,7 +148,8 @@ impl AndroidProject {
         // 3. AndroidManifest.xml parsing (Launcher Activity)
         let launcher_activity = parse_manifest_file(&module_dir)
             .or_else(|| parse_manifest_file(&root.join("app")))
-            .or_else(|| parse_manifest_file(&root));
+            .or_else(|| parse_manifest_file(&root))
+            .or_else(|| find_launcher_activity_in_intermediates(&root));
 
         Self {
             name: project_name,
@@ -310,12 +338,16 @@ fn parse_build_file(dir: &Path) -> (Option<String>, Option<String>, Vec<String>)
 
 /// Parses `applicationId`, `namespace`, and build variants from `build.gradle[.kts]` content.
 pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<String>, Vec<String>) {
-    // 1. applicationId
-    let app_id_regex = Regex::new(r#"applicationId\s*(?:=\s*)?['"]([^'"]+)['"]"#).unwrap();
+    // 1. applicationId (supports =, parentheses, quotes, setApplicationId, mainApplicationId)
+    let app_id_regex = Regex::new(
+        r#"(?:applicationId|mainApplicationId|setApplicationId)\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#,
+    )
+    .unwrap();
     let application_id = app_id_regex.captures(content).map(|cap| cap[1].to_string());
 
-    // 2. namespace
-    let namespace_regex = Regex::new(r#"namespace\s*(?:=\s*)?['"]([^'"]+)['"]"#).unwrap();
+    // 2. namespace (supports =, parentheses, quotes)
+    let namespace_regex =
+        Regex::new(r#"namespace\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#).unwrap();
     let namespace = namespace_regex.captures(content).map(|cap| cap[1].to_string());
 
     // 3. buildTypes & productFlavors
@@ -441,6 +473,310 @@ pub fn parse_manifest_launcher_activity(content: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Parses the `applicationId` attribute from Gradle's `output-metadata.json`.
+pub fn parse_output_metadata(content: &str) -> Option<String> {
+    let re = Regex::new(r#""applicationId"\s*:\s*['"]([^'"]+)['"]"#).unwrap();
+    re.captures(content).map(|c| c[1].to_string())
+}
+
+/// Parses application ID or namespace definitions from `gradle.properties`.
+pub fn parse_gradle_properties_app_id(content: &str) -> Option<String> {
+    let re = Regex::new(
+        r#"(?m)^\s*(?:APP_ID|APPLICATION_ID|PACKAGE_NAME|applicationId|namespace)\s*=\s*['"]?([a-zA-Z0-9_\.]+)['"]?"#,
+    )
+    .unwrap();
+    re.captures(content).map(|c| c[1].to_string())
+}
+
+/// Parses the `package="..."` attribute from an `AndroidManifest.xml` string.
+pub fn parse_manifest_package_name(content: &str) -> Option<String> {
+    let re = Regex::new(r#"package\s*=\s*['"]([^'"]+)['"]"#).unwrap();
+    re.captures(content).map(|c| c[1].to_string())
+}
+
+/// Scans for `applicationId` or package name across `output-metadata.json`,
+/// merged manifests, `gradle.properties`, and all project Gradle files.
+pub fn extract_application_id_from_path(root: &Path) -> Option<String> {
+    // 1. Gradle output-metadata.json (100% accurate if project has been built)
+    if let Some(id) = find_application_id_in_metadata(root) {
+        return Some(id);
+    }
+
+    // 2. Merged / packaged manifests from Gradle build outputs
+    if let Some(id) = find_application_id_in_intermediates(root) {
+        return Some(id);
+    }
+
+    // 3. gradle.properties files
+    if let Some(id) = find_application_id_in_properties(root) {
+        return Some(id);
+    }
+
+    // 4. Source AndroidManifest.xml files
+    if let Some(id) = find_application_id_in_source_manifests(root) {
+        return Some(id);
+    }
+
+    // 5. All build.gradle / build.gradle.kts files (submodules, buildSrc, build-logic)
+    if let Some(id) = find_application_id_in_gradle_files(root) {
+        return Some(id);
+    }
+
+    None
+}
+
+fn find_application_id_in_metadata(root: &Path) -> Option<String> {
+    let candidates = [
+        root.join("app/build/outputs/apk"),
+        root.join("build/outputs/apk"),
+        root.join("app/build/outputs"),
+        root.join("build/outputs"),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            if let Some(id) =
+                scan_file_named(candidate, "output-metadata.json", 4, &parse_output_metadata)
+            {
+                return Some(id);
+            }
+        }
+    }
+
+    let root_build = root.join("build");
+    if root_build.exists() {
+        if let Some(id) =
+            scan_file_named(&root_build, "output-metadata.json", 6, &parse_output_metadata)
+        {
+            return Some(id);
+        }
+    }
+
+    None
+}
+
+fn find_application_id_in_intermediates(root: &Path) -> Option<String> {
+    let intermediate_dirs = [
+        root.join("app/build/intermediates/merged_manifests"),
+        root.join("app/build/intermediates/packaged_manifests"),
+        root.join("build/intermediates/merged_manifests"),
+        root.join("build/intermediates/packaged_manifests"),
+    ];
+
+    for dir in &intermediate_dirs {
+        if dir.exists() {
+            if let Some(pkg) =
+                scan_file_named(dir, "AndroidManifest.xml", 5, &parse_manifest_package_name)
+            {
+                return Some(pkg);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_launcher_activity_in_intermediates(root: &Path) -> Option<String> {
+    let intermediate_dirs = [
+        root.join("app/build/intermediates/merged_manifests"),
+        root.join("build/intermediates/merged_manifests"),
+    ];
+
+    for dir in &intermediate_dirs {
+        if dir.exists() {
+            if let Some(activity) = scan_file_named(dir, "AndroidManifest.xml", 5, &|c| {
+                parse_manifest_launcher_activity(c)
+            }) {
+                return Some(activity);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_application_id_in_properties(root: &Path) -> Option<String> {
+    let root_props = root.join("gradle.properties");
+    if root_props.exists() {
+        if let Ok(content) = std::fs::read_to_string(&root_props) {
+            if let Some(id) = parse_gradle_properties_app_id(&content) {
+                return Some(id);
+            }
+        }
+    }
+
+    scan_file_named(root, "gradle.properties", 2, &parse_gradle_properties_app_id)
+}
+
+fn find_application_id_in_source_manifests(root: &Path) -> Option<String> {
+    let standard_manifests = [
+        root.join("app/src/main/AndroidManifest.xml"),
+        root.join("src/main/AndroidManifest.xml"),
+        root.join("AndroidManifest.xml"),
+    ];
+
+    for manifest in &standard_manifests {
+        if manifest.exists() {
+            if let Ok(content) = std::fs::read_to_string(manifest) {
+                if let Some(pkg) = parse_manifest_package_name(&content) {
+                    return Some(pkg);
+                }
+            }
+        }
+    }
+
+    scan_source_manifests(root, 0, 4)
+}
+
+fn scan_source_manifests(dir: &Path, depth: usize, max_depth: usize) -> Option<String> {
+    if depth > max_depth || !dir.is_dir() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if entry.file_name() == "AndroidManifest.xml" {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(pkg) = parse_manifest_package_name(&content) {
+                        return Some(pkg);
+                    }
+                }
+            }
+        } else if path.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || name_str == "build"
+                || name_str == "target"
+                || name_str == "node_modules"
+            {
+                continue;
+            }
+            if let Some(pkg) = scan_source_manifests(&path, depth + 1, max_depth) {
+                return Some(pkg);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_application_id_in_gradle_files(root: &Path) -> Option<String> {
+    let direct_builds = [
+        root.join("app/build.gradle.kts"),
+        root.join("app/build.gradle"),
+        root.join("build.gradle.kts"),
+        root.join("build.gradle"),
+    ];
+
+    for file in &direct_builds {
+        if file.exists() {
+            if let Ok(content) = std::fs::read_to_string(file) {
+                let (app_id, namespace, _) = parse_build_gradle_content(&content);
+                if let Some(id) = app_id.or(namespace) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    scan_gradle_files_recursive(root, 0, 3)
+}
+
+fn scan_gradle_files_recursive(dir: &Path, depth: usize, max_depth: usize) -> Option<String> {
+    if depth > max_depth || !dir.is_dir() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str == "build.gradle" || name_str == "build.gradle.kts" {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let (app_id, namespace, _) = parse_build_gradle_content(&content);
+                    if let Some(id) = app_id.or(namespace) {
+                        return Some(id);
+                    }
+                }
+            }
+        } else if path.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || name_str == "build"
+                || name_str == "target"
+                || name_str == "node_modules"
+            {
+                continue;
+            }
+            if let Some(id) = scan_gradle_files_recursive(&path, depth + 1, max_depth) {
+                return Some(id);
+            }
+        }
+    }
+
+    None
+}
+
+fn scan_file_named<F>(
+    dir: &Path,
+    target_file_name: &str,
+    max_depth: usize,
+    parser: &F,
+) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    fn recurse<F>(
+        dir: &Path,
+        target: &str,
+        depth: usize,
+        max_depth: usize,
+        parser: &F,
+    ) -> Option<String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        if depth > max_depth || !dir.is_dir() {
+            return None;
+        }
+
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if entry.file_name().to_string_lossy() == target {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Some(res) = parser(&content) {
+                            return Some(res);
+                        }
+                    }
+                }
+            } else if path.is_dir() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with('.')
+                    || name_str == "target"
+                    || name_str == "node_modules"
+                {
+                    continue;
+                }
+                if let Some(res) = recurse(&path, target, depth + 1, max_depth, parser) {
+                    return Some(res);
+                }
+            }
+        }
+        None
+    }
+
+    recurse(dir, target_file_name, 0, max_depth, parser)
 }
 
 // ============================================================================
@@ -716,5 +1052,108 @@ mod tests {
         assert!(nearby.contains(&p2));
 
         let _ = fs::remove_dir_all(&temp_base);
+    }
+
+    #[test]
+    fn test_parse_output_metadata() {
+        let json_content = r#"{
+            "version": 3,
+            "artifactType": {
+                "type": "APK",
+                "kind": "Directory"
+            },
+            "applicationId": "com.infallible.example.app",
+            "variantName": "debug",
+            "elements": []
+        }"#;
+
+        assert_eq!(
+            parse_output_metadata(json_content),
+            Some("com.infallible.example.app".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_build_gradle_varied_expressions() {
+        // Kotlin DSL function call style
+        let kts = r#"
+            android {
+                namespace("com.kts.namespace")
+                defaultConfig {
+                    applicationId("com.kts.appid")
+                }
+            }
+        "#;
+        let (app_id, ns, _) = parse_build_gradle_content(kts);
+        assert_eq!(app_id, Some("com.kts.appid".to_string()));
+        assert_eq!(ns, Some("com.kts.namespace".to_string()));
+
+        // Groovy setApplicationId and single quotes
+        let groovy = r#"
+            android {
+                namespace = 'com.groovy.ns'
+                defaultConfig {
+                    setApplicationId("com.groovy.app")
+                }
+            }
+        "#;
+        let (app_id2, ns2, _) = parse_build_gradle_content(groovy);
+        assert_eq!(app_id2, Some("com.groovy.app".to_string()));
+        assert_eq!(ns2, Some("com.groovy.ns".to_string()));
+
+        // mainApplicationId convention
+        let convention = r#"
+            android {
+                mainApplicationId = "com.convention.app"
+            }
+        "#;
+        let (app_id3, _, _) = parse_build_gradle_content(convention);
+        assert_eq!(app_id3, Some("com.convention.app".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gradle_properties_and_manifest_package() {
+        let props = r#"
+            org.gradle.jvmargs=-Xmx2048m
+            APPLICATION_ID = com.props.appid
+            VERSION_NAME=1.0.0
+        "#;
+        assert_eq!(
+            parse_gradle_properties_app_id(props),
+            Some("com.props.appid".to_string())
+        );
+
+        let manifest = r#"
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                package="com.manifest.pkg">
+                <application />
+            </manifest>
+        "#;
+        assert_eq!(
+            parse_manifest_package_name(manifest),
+            Some("com.manifest.pkg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_application_id_fallback_to_metadata() {
+        let temp_dir = std::env::temp_dir().join(format!("overridepulse_eff_id_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let apk_out = temp_dir.join("app/build/outputs/apk/debug");
+        fs::create_dir_all(&apk_out).unwrap();
+        File::create(temp_dir.join("gradlew")).unwrap();
+        File::create(temp_dir.join("settings.gradle")).unwrap();
+
+        let meta = r#"{"applicationId": "com.resolved.from.metadata"}"#;
+        fs::write(apk_out.join("output-metadata.json"), meta).unwrap();
+
+        let project = AndroidProject::detect(&temp_dir);
+        assert_eq!(
+            project.resolve_effective_application_id(),
+            Some("com.resolved.from.metadata".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

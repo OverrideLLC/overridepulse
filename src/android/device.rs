@@ -148,6 +148,75 @@ impl Device {
     }
 }
 
+/// Actions for interacting directly with and configuring the connected Android device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceAction {
+    WirelessPairAndConnect,
+    EnableTcpip5555,
+    ToggleWifi,
+    ToggleMobileData,
+    ToggleStayAwake,
+    ToggleDarkMode,
+    ToggleShowTaps,
+    OpenWirelessDebuggingSettings,
+    TakeScreenshot,
+    RebootDevice,
+}
+
+impl DeviceAction {
+    /// Returns all supported device control actions.
+    pub fn all() -> &'static [DeviceAction] {
+        &[
+            DeviceAction::WirelessPairAndConnect,
+            DeviceAction::EnableTcpip5555,
+            DeviceAction::ToggleWifi,
+            DeviceAction::ToggleMobileData,
+            DeviceAction::ToggleStayAwake,
+            DeviceAction::ToggleDarkMode,
+            DeviceAction::ToggleShowTaps,
+            DeviceAction::OpenWirelessDebuggingSettings,
+            DeviceAction::TakeScreenshot,
+            DeviceAction::RebootDevice,
+        ]
+    }
+
+    /// User-facing action title for menus and lists.
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::WirelessPairAndConnect => "Pair & Connect Wireless ADB",
+            Self::EnableTcpip5555 => "Enable ADB over Wi-Fi (tcpip 5555)",
+            Self::ToggleWifi => "Toggle Device Wi-Fi (ON/OFF)",
+            Self::ToggleMobileData => "Toggle Mobile Data (ON/OFF)",
+            Self::ToggleStayAwake => "Toggle Stay Awake While Plugged",
+            Self::ToggleDarkMode => "Toggle Dark / Light Theme",
+            Self::ToggleShowTaps => "Toggle Show Taps on Screen",
+            Self::OpenWirelessDebuggingSettings => "Open Developer / Wireless Debug Settings",
+            Self::TakeScreenshot => "Take Screenshot to Project Folder",
+            Self::RebootDevice => "Reboot Device",
+        }
+    }
+
+    /// Action description explaining effect on target device.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::WirelessPairAndConnect => "Pair with 6-digit code and connect to wireless ADB port",
+            Self::EnableTcpip5555 => {
+                "Restart ADB daemon listening on TCP port 5555 for Wi-Fi debugging"
+            }
+            Self::ToggleWifi => "Toggle device Wi-Fi interface enabled or disabled via svc/cmd",
+            Self::ToggleMobileData => "Toggle device cellular data connection via svc data",
+            Self::ToggleStayAwake => "Toggle keep screen awake while USB/AC charging is active",
+            Self::ToggleDarkMode => "Switch device system night mode / dark theme on or off",
+            Self::ToggleShowTaps => "Toggle visual touch feedback indicators on the screen",
+            Self::OpenWirelessDebuggingSettings => {
+                "Open Developer options and Wireless debugging settings on device screen"
+            }
+            Self::TakeScreenshot => "Capture device display to a PNG file in project directory",
+            Self::RebootDevice => "Reboot the connected Android device via ADB",
+        }
+    }
+}
+
 /// Parses the battery level percentage from `dumpsys battery` output.
 pub fn parse_battery_level(output: &str) -> Option<u8> {
     for line in output.lines() {
@@ -396,5 +465,34 @@ mod tests {
 
         assert_eq!(parse_battery_level(dumpsys_battery), Some(87));
         assert_eq!(parse_battery_level("invalid output"), None);
+    }
+
+    #[test]
+    fn test_device_action_metadata() {
+        let actions = DeviceAction::all();
+        assert_eq!(actions.len(), 10);
+
+        for action in actions {
+            assert!(!action.title().is_empty());
+            assert!(!action.description().is_empty());
+        }
+
+        assert_eq!(
+            DeviceAction::WirelessPairAndConnect.title(),
+            "Pair & Connect Wireless ADB"
+        );
+        assert_eq!(
+            DeviceAction::EnableTcpip5555.title(),
+            "Enable ADB over Wi-Fi (tcpip 5555)"
+        );
+        assert_eq!(
+            DeviceAction::ToggleWifi.title(),
+            "Toggle Device Wi-Fi (ON/OFF)"
+        );
+        assert_eq!(
+            DeviceAction::TakeScreenshot.title(),
+            "Take Screenshot to Project Folder"
+        );
+        assert_eq!(DeviceAction::RebootDevice.title(), "Reboot Device");
     }
 }

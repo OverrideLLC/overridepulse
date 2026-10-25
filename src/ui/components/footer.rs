@@ -9,8 +9,11 @@ use ratatui::{
 use crate::app::AppState;
 use crate::ui::theme::Theme;
 
-/// Renders the bottom footer bar with rounded borders and keybinding hints:
-/// `[Tab] Switch Panel │ [g] Stop Gradle │ [/] Filter │ [v] Variant │ [l] Logcat │ [?] Help │ [q] Quit`
+/// Renders the bottom footer bar with rounded borders:
+/// - Left side: Navigation and command keybindings:
+///   `[Tab] Panel │ [Enter] Run │ [m] View Mode │ [1/2/3] Toggle Panes │ [w] Wi-Fi ADB │ [v] Variant │ [?] Help │ [q] Quit`
+/// - Right side: Active project name, detected `applicationId`, and active build variant:
+///   `📦 MyApp (com.example.app) │ ⚡ Variant: debug`
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -24,8 +27,8 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(78), // Shortcuts
-            Constraint::Percentage(22), // Status message
+            Constraint::Percentage(64), // Shortcuts
+            Constraint::Percentage(36), // Project info & Variant
         ])
         .split(inner);
 
@@ -37,19 +40,22 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let shortcuts_line = Line::from(vec![
         Span::styled(" [Tab] ", key_style),
-        Span::styled("Switch Panel", desc_style),
+        Span::styled("Panel", desc_style),
         Span::styled(" │ ", sep_style),
-        Span::styled("[g] ", key_style),
-        Span::styled("Stop Gradle", desc_style),
+        Span::styled("[Enter] ", key_style),
+        Span::styled("Run", desc_style),
         Span::styled(" │ ", sep_style),
-        Span::styled("[/] ", key_style),
-        Span::styled("Filter", desc_style),
+        Span::styled("[m] ", key_style),
+        Span::styled("View Mode", desc_style),
+        Span::styled(" │ ", sep_style),
+        Span::styled("[1/2/3] ", key_style),
+        Span::styled("Toggle Panes", desc_style),
+        Span::styled(" │ ", sep_style),
+        Span::styled("[w] ", key_style),
+        Span::styled("Wi-Fi ADB", desc_style),
         Span::styled(" │ ", sep_style),
         Span::styled("[v] ", key_style),
         Span::styled("Variant", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[l] ", key_style),
-        Span::styled("Logcat", desc_style),
         Span::styled(" │ ", sep_style),
         Span::styled("[?] ", key_style),
         Span::styled("Help", desc_style),
@@ -58,15 +64,36 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled("Quit", desc_style),
     ]);
 
-    let status_text = app.status_message.as_deref().unwrap_or("Ready");
-    let status_line = Line::from(vec![
-        Span::styled(status_text, Style::default().fg(Theme::TEXT_MUTED)),
-        Span::raw(" "),
-    ]);
+    let mut info_spans = vec![
+        Span::styled("📦 ", Style::default().fg(Theme::ACCENT)),
+        Span::styled(
+            &app.project.name,
+            Style::default()
+                .fg(Theme::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    if let Some(ref app_id) = app.project.application_id {
+        info_spans.push(Span::styled(
+            format!(" ({app_id})"),
+            Style::default().fg(Theme::TEXT_MUTED),
+        ));
+    }
+
+    info_spans.push(Span::styled(" │ ⚡ Variant: ", sep_style));
+    info_spans.push(Span::styled(
+        format!("{} ", app.project.active_variant),
+        Style::default()
+            .fg(Theme::WARNING)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    let project_info_line = Line::from(info_spans);
 
     frame.render_widget(Paragraph::new(shortcuts_line), chunks[0]);
     frame.render_widget(
-        Paragraph::new(status_line).alignment(Alignment::Right),
+        Paragraph::new(project_info_line).alignment(Alignment::Right),
         chunks[1],
     );
 }

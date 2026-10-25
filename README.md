@@ -7,24 +7,36 @@
 
 > **Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)**
 
-OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) designed to streamline Android and Gradle development workflows. Stop wrestling with bloated IDE windows or typing repetitive Gradle/ADB commands—manage devices, build variants, logcat streams, and Gradle daemons with single-key shortcuts.
+OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) designed to streamline Android and Gradle development workflows. Stop wrestling with bloated IDE windows or typing repetitive Gradle/ADB commands—manage devices, build variants, logcat streams, ADB hardware toggles, and Gradle daemons with single-key shortcuts.
 
 ---
 
-## ✨ Features
+## 🌟 What's New in v0.2.0
+
+- 🎯 **Deep `applicationId` Detection**: Multi-pass resolution inspecting Kotlin DSL (`build.gradle.kts`), Groovy DSL (`build.gradle`), `namespace`, `gradle.properties`, and automatic fallback to `build/outputs/apk/**/output-metadata.json`.
+- 🔍 **App-Only Exclusive Logcat (`--pid=<pid>`)**: Logcat streaming is 100% isolated to the target application's active process ID. No system spam, no unwanted third-party logs.
+- 🚀 **Auto-Launch After Install**: Building and deploying APK (`[b]`) or AAB automatically detects the main launcher activity or launcher alias and launches the app immediately upon install.
+- 📶 **Interactive ADB Wireless Pair & Connect Modal (`[w]`)**: Pair with 6-digit wireless debugging codes (Android 11+) and connect seamlessly without leaving the terminal.
+- 🎛️ **Direct ADB Hardware & System Controls**: Dedicated upper panel for toggling Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Touch feedback taps, taking screenshots, rebooting, and enabling `tcpip 5555`.
+- 📊 **Configurable Multi-Pane Console**: Toggle Simplified event summary (`[1]`), Raw Build output (`[2]`), and Live Logcat (`[3]`), or cycle between view presets (`[m]`/`[l]`).
+- 🧹 **Optimized Headerless UI**: Space-saving layout with project status and active variant consolidated cleanly into the bottom footer bar.
+
+---
+
+## ✨ Core Features
 
 - **⚡ Blazing Fast & Memory Efficient**: Built natively in Rust (Ratatui + Tokio). Consumes negligible CPU and RAM compared to standard IDEs.
 - **📱 Real-time ADB Device Monitor**: Automatic auto-discovery and state tracking for physical USB devices, emulators, and wireless ADB targets.
 - **🚀 One-Key Quick Actions**:
-  - `[b]` Assemble & install debug APK
-  - `[a]` Assemble AAB & deploy via Bundletool
+  - `[b]` Assemble & install debug APK (auto-launches on completion)
+  - `[r]` Relaunch main launcher activity (`am start -W`)
+  - `[k]` Force-stop application process (`am force-stop`)
+  - `[u]` Completely uninstall application (`adb uninstall`)
   - `[g]` **Stop all running Gradle daemons (`./gradlew --stop`) & terminate orphan processes**
-  - `[k]` Force-stop app process
-  - `[r]` Relaunch launcher activity
-  - `[c]` Clear app data & cache (`pm clear`)
-  - `[u]` Completely uninstall application
-  - `[s]` Launch screen mirroring via `scrcpy`
-- **📜 Live Non-blocking Logcat**: High-throughput log viewer with level colorization (Error, Warning, Info, Debug, Verbose), real-time query filtering, and per-app package isolation (`[f]`).
+  - `[w]` Open ADB Wireless Pair & Connect modal
+  - `Enter / Space` on **App & Gradle Actions**: Clear app data (`pm clear`), Build AAB & deploy, Launch `scrcpy`.
+  - `Enter / Space` on **Device Controls**: Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Taps, Settings, Screenshot, Reboot.
+- **📜 Live Non-blocking Logcat**: High-throughput log viewer with level colorization, real-time query filtering, and automatic per-app process PID isolation.
 - **📂 Multi-Project Discovery**: Interactive project selector (`[p]`) with automatic detection of Gradle modules, application IDs, and build variants.
 - **🛑 Zero UI Blocking**: All ADB and Gradle operations run in asynchronous Tokio background tasks with live progress indicators.
 
@@ -57,8 +69,8 @@ sudo cp target/release/overridepulse /usr/local/bin/
 
 - **Android SDK Platform-Tools** (`adb` in your `PATH` or standard SDK location).
 - **Gradle** / Gradle Wrapper (`./gradlew` in project root).
-- *(Optional)* **scrcpy** for screen mirroring (`[s]`).
-- *(Optional)* **bundletool** for Android App Bundle deployments (`[a]`).
+- *(Optional)* **scrcpy** for screen mirroring.
+- *(Optional)* **bundletool** for Android App Bundle deployments.
 
 ---
 
@@ -87,39 +99,36 @@ overridepulse --tick-rate 100
 
 ## ⌨️ Keyboard Shortcuts
 
-### Global & Navigation
+### Navigation & Panes
 
 | Key | Action |
 |---|---|
-| `Tab` / `BackTab` | Cycle focus between panels (Devices, Actions, Output / Logcat) |
-| `↑` / `↓` or `k` / `j` | Navigate items in list / scroll output buffers |
-| `PageUp` / `PageDown` | Fast scroll (10 lines) |
+| `Tab` / `Shift+Tab` | Cycle focus between panels (`Devices` → `Device Controls` → `Actions` → `Console`) |
+| `↑` / `↓` or `k` / `j` | Navigate active list or scroll console logs |
+| `1` | Toggle Simplified console pane |
+| `2` | Toggle Raw Build Output pane |
+| `3` | Toggle Live Logcat pane |
+| `m` or `l` | Cycle console view presets (Simplified / Build / Logcat / Parity / Triple) |
+| `w` | Open ADB Wireless Pair & Connect modal |
 | `v` | Cycle active build variant (`debug`, `release`, etc.) |
 | `p` | Open Android project selector modal |
-| `?` | Toggle help modal |
+| `?` | Toggle help overlay modal |
 | `q` / `Ctrl+C` | Quit OverridePulse |
 | `Esc` / `Ctrl+X` | Cancel running background task or dismiss modal |
 
-### Quick Actions
+### Actions & Device Controls
 
 | Key | Action | Description |
 |---|---|---|
-| `[b]` | **Build & Install Debug APK** | Runs `./gradlew assembleDebug` and installs via `adb install -r` |
-| `[a]` | **Build AAB & Deploy** | Generates App Bundle, extracts device APKS via `bundletool`, and deploys |
-| `[g]` | **Stop All Gradle Daemons** | Stops daemons with `./gradlew --stop` and terminates orphaned processes |
-| `[k]` | **Force Stop App** | Terminates app immediately (`adb shell am force-stop`) |
+| `Enter` / `Space` | **Execute Highlighted Action** | Executes selected Action or Device Control / Selects device |
+| `[b]` | **Build & Install Debug APK** | Runs `./gradlew assembleDebug`, installs via ADB, and auto-launches |
 | `[r]` | **Relaunch Activity** | Stops and relaunches main launcher activity (`am start -W`) |
-| `[c]` | **Clear App Data** | Wipes app storage and runtime cache (`adb shell pm clear`) |
+| `[k]` | **Force Stop App** | Terminates app process immediately (`adb shell am force-stop`) |
 | `[u]` | **Uninstall App** | Uninstalls package from device (`adb uninstall`) |
-| `[s]` | **Launch Scrcpy** | Opens mirrored display session in background |
+| `[g]` | **Stop All Gradle Daemons** | Stops daemons with `./gradlew --stop` and cleans orphaned processes |
+| `[w]` | **Wireless ADB Connect** | Interactive modal for pairing & connecting over Wi-Fi |
 
-### Logcat & Filtering
-
-| Key | Action | Description |
-|---|---|---|
-| `[l]` | **Toggle Logcat View** | Switch between Build Output terminal and Live Logcat stream |
-| `[f]` | **Toggle App Filter** | Restrict Logcat output strictly to the active project's package |
-| `[/]` | **Search / Filter** | Filter log lines in real-time by search query |
+*Note*: Actions like **Clear App Data**, **Build AAB & Deploy**, and **Launch Scrcpy** are safely selected from the **App & Gradle Actions** list via `Enter` or `Space` to avoid unintentional key collisions.
 
 ---
 
@@ -136,13 +145,14 @@ overridepulse --tick-rate 100
    ┌─────────────────────────┐   ┌─────────────────────────┐
    │    AppState & Events    │   │  Asynchronous Engines   │
    │ - Ring buffers (Deq)    │   │ - DeviceMonitor (ADB)   │
-   │ - Multi-project state   │   │ - LogcatStream (Async)  │
+   │ - Multi-project state   │   │ - LogcatStream (PID-ex) │
    │ - Focus & Modal states  │   │ - ProcessRunner (Tokio) │
+   │ - Multi-pane Parity     │   │ - DeviceAction Toggles  │
    └─────────────────────────┘   └─────────────────────────┘
 ```
 
-- **Ring Buffers**: Output terminals maintain a memory-bounded `VecDeque` buffer (default: 2,000 lines) preventing memory exhaustion during heavy compilation or verbose logcat output.
-- **Safety First**: Implements RAII `TerminalGuard` and a custom panic hook ensuring your terminal emulator is cleanly restored to normal mode under all circumstances.
+- **Ring Buffers**: Output terminals maintain memory-bounded `VecDeque` buffers (2,000 lines for raw build, 100 entries for simplified view) preventing memory exhaustion.
+- **Safety First**: Implements RAII `TerminalGuard` and custom panic hooks ensuring your terminal emulator is cleanly restored to normal mode under all circumstances.
 
 ---
 

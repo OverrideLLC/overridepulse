@@ -14,7 +14,7 @@ use crate::ui::theme::Theme;
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Devices;
 
-    let title = format!(" Connected Devices ({}) ", app.devices.len());
+    let title = format!(" Connected Devices ({}) │ [w] Wi-Fi ADB ", app.devices.len());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     if app.devices.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![
             Span::styled(
-                "  No devices connected. Plug in a device or launch an emulator.",
+                "  No devices connected. Plug in a device or press [w] for Wi-Fi ADB.",
                 Style::default().fg(Theme::TEXT_MUTED),
             ),
         ]));
