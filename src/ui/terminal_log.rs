@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let parity = console_parity_bar(app);
     let title = format!(
-        " [2] Build Output ({}){} │ {parity} ",
+        " [2] Build Output ({}) [Y] Copy{} │ {parity} ",
         app.console_output.len(),
         auto_scroll_tag
     );
@@ -38,7 +38,8 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let show_progress = app.process_state.is_running || app.process_state.progress_percent.is_some();
+    let show_progress =
+        app.process_state.is_running || app.process_state.progress_percent.is_some();
 
     let (progress_area, log_area) = if show_progress && inner.height >= 3 {
         let chunks = Layout::default()
@@ -87,7 +88,8 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let start_idx = if app.auto_scroll_console {
         total_lines.saturating_sub(visible_height)
     } else {
-        app.console_scroll.min(total_lines.saturating_sub(visible_height))
+        app.console_scroll
+            .min(total_lines.saturating_sub(visible_height))
     };
 
     let lines: Vec<Line> = app
@@ -110,18 +112,24 @@ fn highlight_line(line: &str) -> Line<'_> {
         || line.starts_with("Success:")
         || line.contains("Successfully installed")
     {
-        Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::SUCCESS)
+            .add_modifier(Modifier::BOLD)
     } else if line.contains("BUILD FAILED")
         || line.contains("FAILURE:")
         || line.contains("ERROR:")
         || line.starts_with("Failed:")
         || line.starts_with("Error:")
     {
-        Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::ERROR)
+            .add_modifier(Modifier::BOLD)
     } else if line.contains("WARNING:") || line.starts_with("Warning:") {
         Style::default().fg(Theme::WARNING)
     } else if trimmed.starts_with("> Task :") || trimmed.starts_with("Task :") {
-        Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
     } else if trimmed.starts_with('>') || trimmed.starts_with("Executing") {
         Style::default().fg(Theme::ACCENT)
     } else {

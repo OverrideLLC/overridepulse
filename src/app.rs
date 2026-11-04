@@ -65,7 +65,10 @@ impl ProcessState {
 
     pub fn elapsed_and_eta_display(&self) -> String {
         if self.is_running {
-            let elapsed = self.started_at.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+            let elapsed = self
+                .started_at
+                .map(|t| t.elapsed().as_secs_f64())
+                .unwrap_or(0.0);
             if let Some(pct) = self.progress_percent {
                 if pct > 0 && pct < 100 {
                     let total_estimated = elapsed / (pct as f64 / 100.0);
@@ -92,6 +95,14 @@ pub struct AppState {
     pub nearby_projects: Vec<PathBuf>,
     pub selected_project_index: usize,
     pub project_selector_active: bool,
+    /// True while `AndroidProject::detect` is running off the UI thread.
+    pub project_loading: bool,
+    /// True while sibling/nearby project discovery is running off the UI thread.
+    pub projects_discovering: bool,
+    /// Bumped on every project switch so a slow scan cannot overwrite a newer choice.
+    pub project_load_generation: u64,
+    /// Root used for the discovery scan currently in flight.
+    pub discovery_root: PathBuf,
 
     pub devices: Vec<Device>,
     pub selected_device_index: usize,
@@ -140,21 +151,41 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Builds state and detects the project immediately.
+    ///
+    /// Tests and other synchronous callers use this. The interactive TUI uses
+    /// [`AppState::pending`] so detection does not freeze the first frame.
     pub fn new(root_path: PathBuf) -> Self {
-        let project = AndroidProject::detect(&root_path);
-        let is_valid = project.is_valid();
-        let nearby_projects = if !is_valid {
-            AndroidProject::discover_nearby_projects(&root_path, 3)
-        } else {
-            Vec::new()
-        };
-        let project_selector_active = !is_valid;
+        let mut app = Self::blank(root_path.clone());
+        app.project = AndroidProject::detect(&root_path);
+        if !app.project.is_valid() {
+            app.nearby_projects = AndroidProject::discover_nearby_projects(&root_path, 3);
+            app.project_selector_active = true;
+        }
+        app
+    }
 
+    /// Shows the UI immediately and waits for a background project scan.
+    pub fn pending(root_path: PathBuf) -> Self {
+        let mut app = Self::blank(root_path);
+        app.project_loading = true;
+        app.projects_discovering = true;
+        app.project_load_generation = 1;
+        app.status_message = Some("Loading project…".to_string());
+        app
+    }
+
+    fn blank(root_path: PathBuf) -> Self {
+        let project = AndroidProject::placeholder(&root_path);
         Self {
             project,
-            nearby_projects,
+            nearby_projects: Vec::new(),
             selected_project_index: 0,
-            project_selector_active,
+            project_selector_active: false,
+            project_loading: false,
+            projects_discovering: false,
+            project_load_generation: 0,
+            discovery_root: root_path,
             devices: Vec::new(),
             selected_device_index: 0,
             target_device_serial: None,
@@ -200,7 +231,9 @@ impl AppState {
     }
 
     pub fn selected_device_control(&self) -> Option<DeviceControlAction> {
-        DeviceControlAction::all().get(self.selected_device_control_index).copied()
+        DeviceControlAction::all()
+            .get(self.selected_device_control_index)
+            .copied()
     }
 
     pub fn select_next_device_control(&mut self) {
@@ -262,7 +295,11 @@ impl AppState {
     }
 
     pub fn cycle_console_preset(&mut self) {
-        match (self.show_simplified_pane, self.show_build_pane, self.show_logcat_pane) {
+        match (
+            self.show_simplified_pane,
+            self.show_build_pane,
+            self.show_logcat_pane,
+        ) {
             (true, false, false) => {
                 // Preset 2: Solo Build
                 self.show_simplified_pane = false;
@@ -334,19 +371,69 @@ impl AppState {
         }
     }
 
-    pub fn switch_project(&mut self, path: PathBuf) {
-        self.project = AndroidProject::detect(&path);
+    /// Applies a project that was detected on a background thread.
+    pub fn apply_loaded_project(&mut self, project: crate::android::AndroidProject) {
+        let name = project.name.clone();
+        let path = project.root_path.clone();
+        let switched = path != self.project.root_path;
+        self.project = project;
+        self.project_loading = false;
+        if switched {
+            self.clear_logcat();
+        }
+        if !self
+            .nearby_projects
+            .iter()
+            .any(|candidate| candidate == &path)
+        {
+            self.nearby_projects.push(path);
+            self.nearby_projects.sort();
+        }
+        self.status_message = Some(format!("Project: {name}"));
+    }
+
+    pub fn begin_project_switch(&mut self, path: &std::path::Path) -> u64 {
+        self.project_load_generation = self.project_load_generation.saturating_add(1);
+        self.project_loading = true;
         self.project_selector_active = false;
-        self.status_message = Some(format!("Project: {}", self.project.name));
+        let label = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project");
+        self.status_message = Some(format!("Loading {label}…"));
+        self.project_load_generation
     }
 
     pub fn toggle_project_selector(&mut self) {
         self.project_selector_active = !self.project_selector_active;
-        if self.project_selector_active && self.nearby_projects.is_empty() {
-            self.nearby_projects =
-                AndroidProject::discover_nearby_projects(&self.project.root_path, 3);
-            self.selected_project_index = 0;
+        if self.project_selector_active {
+            self.projects_discovering = true;
         }
+    }
+
+    pub fn logcat_plaintext(&self) -> String {
+        self.logcat_entries
+            .iter()
+            .filter(|entry| entry.matches_filter(&self.search_query, None, None, None))
+            .map(|entry| entry.raw.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn console_plaintext(&self) -> String {
+        self.console_output
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn simplified_plaintext(&self) -> String {
+        self.simplified_events
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn next_variant(&mut self) {
@@ -366,7 +453,11 @@ impl AppState {
 
     pub fn toggle_logcat_filter(&mut self) {
         self.logcat_filter_by_app = !self.logcat_filter_by_app;
-        let state = if self.logcat_filter_by_app { "ON" } else { "OFF" };
+        let state = if self.logcat_filter_by_app {
+            "ON"
+        } else {
+            "OFF"
+        };
         let app_id = self.project.application_id.as_deref().unwrap_or("app");
         self.status_message = Some(format!("Logcat filter ({app_id}): {state}"));
     }
@@ -416,7 +507,10 @@ impl AppState {
 
     pub fn finish_task(&mut self, success: bool, message: impl Into<String>) {
         let msg = message.into();
-        let dur = self.process_state.started_at.map(|t| t.elapsed().as_secs_f64());
+        let dur = self
+            .process_state
+            .started_at
+            .map(|t| t.elapsed().as_secs_f64());
         self.process_state.last_duration_secs = dur;
         self.process_state.started_at = None;
         self.process_state.is_running = false;
@@ -691,7 +785,10 @@ mod tests {
     fn test_quick_actions_initialized() {
         let app = AppState::new(PathBuf::from("."));
         assert_eq!(app.actions.len(), QuickAction::all().len());
-        assert_eq!(app.selected_action(), Some(QuickAction::BuildAndInstallDebug));
+        assert_eq!(
+            app.selected_action(),
+            Some(QuickAction::BuildAndInstallDebug)
+        );
     }
 
     #[test]
@@ -792,7 +889,10 @@ mod tests {
 
         app.set_devices(vec![dev1, dev2]);
         assert_eq!(app.selected_device_index, 1);
-        assert_eq!(app.selected_device().map(|d| d.serial.as_str()), Some("target-device-123"));
+        assert_eq!(
+            app.selected_device().map(|d| d.serial.as_str()),
+            Some("target-device-123")
+        );
 
         assert!(app.select_device_by_serial("other-device-456"));
         assert_eq!(app.selected_device_index, 0);

@@ -18,7 +18,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Help & Keybindings (OverridePulse v0.2.0) ")
+        .title(" Help & Keybindings ")
         .title_style(
             Style::default()
                 .fg(Theme::ACCENT)
@@ -63,10 +63,21 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  p                 ", key_style),
-            Span::raw("Open Android project selector modal"),
+            Span::raw("Switch project (siblings and nearby Gradle projects)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  y / Y             ", key_style),
+            Span::raw("Copy logcat (y) or build output (Y) to the clipboard"),
+        ]),
+        Line::from(vec![
+            Span::styled("  f                 ", key_style),
+            Span::raw("Toggle logcat between this app and all device logs"),
         ]),
         Line::raw(""),
-        Line::from(vec![Span::styled("Actions & ADB Device Controls", title_style)]),
+        Line::from(vec![Span::styled(
+            "Actions & ADB Device Controls",
+            title_style,
+        )]),
         Line::from(vec![
             Span::styled("  Enter / Space     ", key_style),
             Span::raw("Execute highlighted Action or Device Control / Select device"),
@@ -92,7 +103,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("Stop all running Gradle daemons (`./gradlew --stop`)"),
         ]),
         Line::from(vec![
-            Span::styled("  Device Controls   ", Style::default().fg(Theme::TEXT_MUTED)),
+            Span::styled(
+                "  Device Controls   ",
+                Style::default().fg(Theme::TEXT_MUTED),
+            ),
             Span::raw("Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Taps, Settings, Screenshot"),
         ]),
         Line::raw(""),

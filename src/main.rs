@@ -16,10 +16,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use overridepulse::{
     android::{
-        device::spawn_device_monitor, ActionContext, DeviceAction, LogcatStream, ProcessRunner,
-        QuickAction,
+        device::spawn_device_monitor, ActionContext, AndroidProject, DeviceAction, LogcatStream,
+        ProcessRunner, QuickAction,
     },
     app::{AppState, Panel, ViewMode},
+    clipboard::{self, CopyMethod},
     config::SdkConfig,
     event::{AppEvent, EventHandler},
     ui,
@@ -93,19 +94,25 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // 4. Initialize State and Event Handler
-    let mut app = AppState::new(root_path);
+    // 4. Initialize State and Event Handler.
+    // Project detection walks Gradle files and build outputs, so it runs off
+    // the UI thread. The first frame paints immediately.
+    let mut app = AppState::pending(root_path.clone());
     app.target_device_serial = cli.device.clone();
 
     app.append_console_line("⚡ OverridePulse initialized".to_string());
     app.append_console_line(format!("📋 {}", sdk_config.status_summary()));
-    app.append_console_line(format!("📂 Project root: {}", app.project.root_path.display()));
+    app.append_console_line(format!("📂 Opening {}", root_path.display()));
     if let Some(ref target) = cli.device {
         app.append_console_line(format!("🎯 Target device specified: {target}"));
     }
 
     let mut event_handler = EventHandler::new(Duration::from_millis(cli.tick_rate));
     let sender = event_handler.sender();
+    let load_generation = app.project_load_generation;
+    spawn_project_load(root_path.clone(), load_generation, sender.clone());
+    app.discovery_root = root_path.clone();
+    spawn_project_discovery(root_path, sender.clone());
 
     // 5. Spawn background ADB device monitor (periodic refresh every 3s)
     let _device_monitor_handle =
@@ -140,10 +147,20 @@ async fn main() -> Result<()> {
                 AppEvent::ProcessFinished(success, message) => {
                     app.finish_task(success, message);
                     if app.project.application_id.is_none() {
-                        app.project.application_id =
-                            app.project.resolve_effective_application_id();
+                        let project = app.project.clone();
+                        let generation = app.project_load_generation;
+                        let tx = sender.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if let Some(application_id) = project.resolve_effective_application_id()
+                            {
+                                let _ = tx.send(AppEvent::ApplicationIdResolved {
+                                    generation,
+                                    application_id,
+                                });
+                            }
+                        });
                     }
-                    sync_logcat_stream(&app, &mut logcat_stream, &sender);
+                    sync_logcat_stream(&app, &mut logcat_stream, &adb_path, &sender);
                 }
                 AppEvent::LogcatLine(entry) => {
                     app.append_logcat_entry(entry);
@@ -155,7 +172,76 @@ async fn main() -> Result<()> {
 
                     // If device changed while streaming logcat or newly discovered, sync stream
                     if prev_serial != new_serial {
-                        sync_logcat_stream(&app, &mut logcat_stream, &sender);
+                        sync_logcat_stream(&app, &mut logcat_stream, &adb_path, &sender);
+                    }
+                }
+                AppEvent::ProjectLoaded {
+                    generation,
+                    project,
+                } => {
+                    if generation != app.project_load_generation {
+                        continue;
+                    }
+                    let previous_root = app.project.root_path.clone();
+                    let resolved_root = project.root_path.clone();
+                    let valid = project.is_valid();
+                    app.apply_loaded_project(project);
+                    app.append_console_line(format!(
+                        "📂 Project: {} ({})",
+                        app.project.name,
+                        app.project.root_path.display()
+                    ));
+                    if let Some(id) = &app.project.application_id {
+                        app.append_console_line(format!("📦 applicationId: {id}"));
+                    }
+                    if !valid {
+                        app.project_selector_active = true;
+                        app.projects_discovering = true;
+                    }
+                    if resolved_root != previous_root {
+                        app.discovery_root = resolved_root.clone();
+                        spawn_project_discovery(resolved_root, sender.clone());
+                    }
+                    sync_logcat_stream(&app, &mut logcat_stream, &adb_path, &sender);
+                }
+                AppEvent::ProjectsDiscovered { root, projects } => {
+                    if root != app.discovery_root {
+                        continue;
+                    }
+                    app.projects_discovering = false;
+                    let previous = app.selected_project().cloned();
+                    app.nearby_projects = projects;
+                    if let Some(previous) = previous {
+                        if let Some(idx) = app
+                            .nearby_projects
+                            .iter()
+                            .position(|path| path == &previous)
+                        {
+                            app.selected_project_index = idx;
+                        }
+                    } else if let Some(idx) = app
+                        .nearby_projects
+                        .iter()
+                        .position(|path| path == &app.project.root_path)
+                    {
+                        app.selected_project_index = idx;
+                    }
+                    if !app.nearby_projects.is_empty()
+                        && app.selected_project_index >= app.nearby_projects.len()
+                    {
+                        app.selected_project_index = 0;
+                    }
+                }
+                AppEvent::ApplicationIdResolved {
+                    generation,
+                    application_id,
+                } => {
+                    if generation == app.project_load_generation
+                        && app.project.application_id.is_none()
+                    {
+                        app.append_console_line(format!("📦 applicationId: {application_id}"));
+                        app.project.application_id = Some(application_id);
+                        sync_logcat_stream(&app, &mut logcat_stream, &adb_path, &sender);
                     }
                 }
                 AppEvent::Resize(_, _) => {
@@ -288,34 +374,98 @@ fn trigger_device_action(
     runner.execute_device_action(action, ctx, sender.clone());
 }
 
+fn spawn_project_load(path: PathBuf, generation: u64, sender: UnboundedSender<AppEvent>) {
+    tokio::task::spawn_blocking(move || {
+        let project = AndroidProject::detect(&path);
+        let _ = sender.send(AppEvent::ProjectLoaded {
+            generation,
+            project,
+        });
+    });
+}
+
+fn spawn_project_discovery(root: PathBuf, sender: UnboundedSender<AppEvent>) {
+    let scanned = root.clone();
+    tokio::task::spawn_blocking(move || {
+        let projects = AndroidProject::discover_switchable_projects(&scanned);
+        let _ = sender.send(AppEvent::ProjectsDiscovered {
+            root: scanned,
+            projects,
+        });
+    });
+}
+
+fn copy_focused_console(app: &mut AppState, key: &KeyEvent) {
+    let copy_build =
+        matches!(key.code, KeyCode::Char('Y')) || key.modifiers.contains(KeyModifiers::SHIFT);
+    let (label, text) = if copy_build {
+        ("build output", app.console_plaintext())
+    } else if app.show_logcat_pane {
+        ("logcat", app.logcat_plaintext())
+    } else if app.show_build_pane {
+        ("build output", app.console_plaintext())
+    } else {
+        ("status", app.simplified_plaintext())
+    };
+
+    match clipboard::copy_to_clipboard(&text) {
+        Ok(method) => {
+            let lines = if text.is_empty() {
+                0
+            } else {
+                text.lines().count()
+            };
+            let via = match method {
+                CopyMethod::System => "clipboard",
+                CopyMethod::Terminal => "terminal clipboard",
+            };
+            app.status_message = Some(format!("Copied {lines} {label} lines to the {via}"));
+            app.append_simplified_event(format!("📋 Copied {lines} {label} lines"));
+        }
+        Err(err) => {
+            app.status_message = Some(err);
+        }
+    }
+}
+
 fn sync_logcat_stream(
     app: &AppState,
     logcat_stream: &mut LogcatStream,
+    adb_path: &Path,
     sender: &UnboundedSender<AppEvent>,
 ) {
+    if app.project_loading {
+        return;
+    }
+
     let should_stream = app.show_logcat_pane || app.view_mode == ViewMode::LogcatView;
 
     if should_stream {
         if let Some(dev) = app.selected_device() {
-            let running_serial = logcat_stream.current_serial();
-            let running_pkg = logcat_stream.package_name();
-
-            let target_serial = &dev.serial;
-            let target_pkg = app.project.resolve_effective_application_id();
+            let target_serial = dev.serial.as_str();
+            let target_pkg = app
+                .project
+                .application_id
+                .clone()
+                .or_else(|| app.project.namespace.clone());
+            let target_variant = app.project.active_variant.clone();
+            let target_filter = app.logcat_filter_by_app;
 
             let needs_start = !logcat_stream.is_running()
-                || running_serial != Some(target_serial)
-                || running_pkg != target_pkg.as_deref();
+                || logcat_stream.current_serial() != Some(target_serial)
+                || logcat_stream.package_name() != target_pkg.as_deref()
+                || logcat_stream.build_variant() != Some(target_variant.as_str())
+                || logcat_stream.is_filtering_by_app() != target_filter;
 
             if needs_start {
                 logcat_stream.start(
+                    adb_path,
                     target_serial,
                     target_pkg,
-                    true, // Always 100% exclusive to app package
+                    target_variant,
+                    target_filter,
                     sender.clone(),
                 );
-            } else {
-                logcat_stream.set_filter_by_app(true);
             }
         } else {
             logcat_stream.stop();
@@ -362,8 +512,16 @@ fn handle_key_event(
             }
             KeyCode::Enter => {
                 if let Some(path) = app.selected_project().cloned() {
-                    app.switch_project(path);
-                    sync_logcat_stream(app, logcat_stream, sender);
+                    if path == app.project.root_path
+                        && app.project.is_valid()
+                        && !app.project_loading
+                    {
+                        app.project_selector_active = false;
+                        app.status_message = Some(format!("Project: {}", app.project.name));
+                    } else {
+                        let generation = app.begin_project_switch(&path);
+                        spawn_project_load(path, generation, sender.clone());
+                    }
                 }
             }
             _ => {}
@@ -501,10 +659,17 @@ fn handle_key_event(
         // Build variant cycle
         KeyCode::Char('v') => {
             app.next_variant();
+            sync_logcat_stream(app, logcat_stream, adb_path, sender);
         }
         // Project selector modal
         KeyCode::Char('p') => {
+            let opening = !app.project_selector_active;
             app.toggle_project_selector();
+            if opening {
+                let root = app.project.root_path.clone();
+                app.discovery_root = root.clone();
+                spawn_project_discovery(root, sender.clone());
+            }
         }
         // Wireless ADB Pair & Connect modal shortcut
         KeyCode::Char('w') => {
@@ -513,7 +678,7 @@ fn handle_key_event(
         // Multi-view preset cycle (m or l)
         KeyCode::Char('m') | KeyCode::Char('l') => {
             app.cycle_console_preset();
-            sync_logcat_stream(app, logcat_stream, sender);
+            sync_logcat_stream(app, logcat_stream, adb_path, sender);
         }
         // Pane toggles: 1 = Simplified, 2 = Build, 3 = Logcat
         KeyCode::Char('1') => {
@@ -524,12 +689,16 @@ fn handle_key_event(
         }
         KeyCode::Char('3') => {
             app.toggle_logcat_pane();
-            sync_logcat_stream(app, logcat_stream, sender);
+            sync_logcat_stream(app, logcat_stream, adb_path, sender);
         }
-        // Toggle Logcat app filter
+        // Toggle Logcat app filter and restart the stream with the new scope.
         KeyCode::Char('f') => {
             app.toggle_logcat_filter();
-            logcat_stream.set_filter_by_app(app.logcat_filter_by_app);
+            sync_logcat_stream(app, logcat_stream, adb_path, sender);
+        }
+        // Copy the visible console. `y` copies logcat; Shift+Y copies build output.
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            copy_focused_console(app, &key);
         }
         // Navigation / Scroll
         KeyCode::Up => {
@@ -539,7 +708,7 @@ fn handle_key_event(
             if (app.show_logcat_pane || app.view_mode == ViewMode::LogcatView)
                 && prev_serial != new_serial
             {
-                sync_logcat_stream(app, logcat_stream, sender);
+                sync_logcat_stream(app, logcat_stream, adb_path, sender);
             }
         }
         KeyCode::Down => {
@@ -549,7 +718,7 @@ fn handle_key_event(
             if (app.show_logcat_pane || app.view_mode == ViewMode::LogcatView)
                 && prev_serial != new_serial
             {
-                sync_logcat_stream(app, logcat_stream, sender);
+                sync_logcat_stream(app, logcat_stream, adb_path, sender);
             }
         }
         KeyCode::PageUp => {
@@ -733,7 +902,14 @@ mod tests {
 
         // Press Enter on WirelessPairAndConnect -> triggers modal
         let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
+        handle_key_event(
+            &mut app,
+            &mut runner,
+            &mut logcat,
+            key_enter,
+            &adb_path,
+            &tx,
+        );
         assert!(app.adb_connect_modal_active);
 
         // Type characters into modal field 0 (connect_ip_port)
@@ -750,7 +926,14 @@ mod tests {
         let key_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_char, &adb_path, &tx);
         assert!(app.adb_pair_ip_port.ends_with('5'));
-        handle_key_event(&mut app, &mut runner, &mut logcat, key_backspace, &adb_path, &tx);
+        handle_key_event(
+            &mut app,
+            &mut runner,
+            &mut logcat,
+            key_backspace,
+            &adb_path,
+            &tx,
+        );
         assert!(!app.adb_pair_ip_port.ends_with('5'));
 
         // Dismiss with Esc

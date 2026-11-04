@@ -136,7 +136,9 @@ impl Device {
                     device.model = val.to_string();
                 } else if let Some(val) = part.strip_prefix("product:") {
                     device.product = val.to_string();
-                } else if part.starts_with("usb:") && device.connection_type == ConnectionType::Unknown {
+                } else if part.starts_with("usb:")
+                    && device.connection_type == ConnectionType::Unknown
+                {
                     device.connection_type = ConnectionType::Usb;
                 }
             }
@@ -199,7 +201,9 @@ impl DeviceAction {
     /// Action description explaining effect on target device.
     pub fn description(&self) -> &'static str {
         match self {
-            Self::WirelessPairAndConnect => "Pair with 6-digit code and connect to wireless ADB port",
+            Self::WirelessPairAndConnect => {
+                "Pair with 6-digit code and connect to wireless ADB port"
+            }
             Self::EnableTcpip5555 => {
                 "Restart ADB daemon listening on TCP port 5555 for Wi-Fi debugging"
             }
@@ -440,7 +444,10 @@ mod tests {
         // 8. Unknown
         let unknown = &devices[7];
         assert_eq!(unknown.serial, "UNKNOWN_DEV");
-        assert_eq!(unknown.state, DeviceState::Unknown("some_strange_state".to_string()));
+        assert_eq!(
+            unknown.state,
+            DeviceState::Unknown("some_strange_state".to_string())
+        );
     }
 
     #[test]

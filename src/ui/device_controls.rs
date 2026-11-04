@@ -62,7 +62,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .enumerate()
         .map(|(idx, action)| {
             let is_selected = idx == app.selected_device_control_index;
-            let cursor = if is_selected && is_focused { "▶ " } else { "  " };
+            let cursor = if is_selected && is_focused {
+                "▶ "
+            } else {
+                "  "
+            };
 
             let mut spans = vec![
                 Span::styled(cursor, Style::default().fg(Theme::ACCENT)),

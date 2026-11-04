@@ -1,8 +1,8 @@
-use std::time::Duration;
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
+use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use crate::android::{Device, LogEntry};
+use crate::android::{AndroidProject, Device, LogEntry};
 
 /// Represents all possible events handled by the application event loop.
 #[derive(Debug, Clone)]
@@ -23,6 +23,23 @@ pub enum AppEvent {
     LogcatLine(LogEntry),
     /// Updated list of devices discovered by ADB poller
     DevicesUpdated(Vec<Device>),
+    /// Android project finished loading off the UI thread.
+    /// `generation` drops stale results when the user switches again.
+    ProjectLoaded {
+        generation: u64,
+        project: AndroidProject,
+    },
+    /// Nearby Android projects finished scanning off the UI thread.
+    /// `root` is the directory that was scanned, so a stale result can be ignored.
+    ProjectsDiscovered {
+        root: std::path::PathBuf,
+        projects: Vec<std::path::PathBuf>,
+    },
+    /// `applicationId` resolved after a build without blocking the UI.
+    ApplicationIdResolved {
+        generation: u64,
+        application_id: String,
+    },
 }
 
 /// Asynchronous event handler that aggregates terminal events, ticks,

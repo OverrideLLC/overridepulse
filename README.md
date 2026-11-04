@@ -11,6 +11,15 @@ OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) desig
 
 ---
 
+## 🌟 What's New in v0.2.2
+
+- ⚡ **Non-blocking project load**: Gradle and build-output scans run off the UI thread, so opening a large project no longer freezes the TUI.
+- 📂 **In-app project switching (`[p]`)**: Lists the current project, its siblings, and one nested level. `Enter` opens the selection without blocking the interface.
+- 🔍 **App logcat by UID**: Streams every process of the application (`--uid`), including `:push` and WebView workers, and debug builds that use an `applicationId` suffix. Ordinary app lines are no longer hidden just because they omit the package name. `[f]` toggles all-device logcat.
+- 📋 **Copy consoles (`[y]` / `[Y]`)**: Copy live logcat or build output to the system clipboard (`wl-copy`, `xclip`, `xsel`) or the terminal clipboard.
+
+---
+
 ## 🌟 What's New in v0.2.1
 
 - 🎯 **Strict Android Application Module Detection**: Complete multi-module and Kotlin Multiplatform (KMP / Clean Architecture) resolution. Accurately prioritizes application modules (`:composeApp`, `:androidApp`, `:app`) over library domain/data modules (`:auth:domain`, `:core:data`), completely preventing library namespace misclassification.
@@ -44,7 +53,7 @@ OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) desig
   - `[w]` Open ADB Wireless Pair & Connect modal
   - `Enter / Space` on **App & Gradle Actions**: Clear app data (`pm clear`), Build AAB & deploy, Launch `scrcpy`.
   - `Enter / Space` on **Device Controls**: Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Taps, Settings, Screenshot, Reboot.
-- **📜 Live Non-blocking Logcat**: High-throughput log viewer with level colorization, real-time query filtering, and automatic per-app process PID isolation.
+- **📜 Live Non-blocking Logcat**: High-throughput log viewer with level colorization, real-time query filtering, and app-wide UID isolation (every process of the package).
 - **📂 Multi-Project Discovery**: Interactive project selector (`[p]`) with automatic detection of Gradle modules, application IDs, and build variants.
 - **🛑 Zero UI Blocking**: All ADB and Gradle operations run in asynchronous Tokio background tasks with live progress indicators.
 
@@ -119,7 +128,9 @@ overridepulse --tick-rate 100
 | `m` or `l` | Cycle console view presets (Simplified / Build / Logcat / Parity / Triple) |
 | `w` | Open ADB Wireless Pair & Connect modal |
 | `v` | Cycle active build variant (`debug`, `release`, etc.) |
-| `p` | Open Android project selector modal |
+| `p` | Switch Android project (current, siblings, and one nested level) |
+| `y` / `Y` | Copy logcat (`y`) or build output (`Y`) to the clipboard |
+| `f` | Toggle logcat between this app and all device logs |
 | `?` | Toggle help overlay modal |
 | `q` / `Ctrl+C` | Quit OverridePulse |
 | `Esc` / `Ctrl+X` | Cancel running background task or dismiss modal |

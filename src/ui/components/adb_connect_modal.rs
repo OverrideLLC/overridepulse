@@ -48,18 +48,18 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         ])
         .split(inner);
 
-    let intro_text = Line::from(vec![
-        Span::styled(
-            "Connect over Wi-Fi (Android 11+ Wireless Debugging or tcpip port):",
-            Style::default().fg(Theme::TEXT_MUTED),
-        ),
-    ]);
+    let intro_text = Line::from(vec![Span::styled(
+        "Connect over Wi-Fi (Android 11+ Wireless Debugging or tcpip port):",
+        Style::default().fg(Theme::TEXT_MUTED),
+    )]);
     frame.render_widget(Paragraph::new(intro_text), vertical_chunks[0]);
 
     // Field 1: Connect IP:Port
     let f1_active = app.adb_modal_field_index == 0;
     let f1_border_style = if f1_active {
-        Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Theme::INACTIVE_BORDER)
     };
@@ -71,21 +71,35 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .border_style(f1_border_style);
 
     let f1_val = if app.adb_connect_ip_port.is_empty() {
-        if f1_active { "█" } else { "192.168.1.50:5555" }
+        if f1_active {
+            "█"
+        } else {
+            "192.168.1.50:5555"
+        }
     } else if f1_active {
         &format!("{}█", app.adb_connect_ip_port)
     } else {
         &app.adb_connect_ip_port
     };
-    let f1_para = Paragraph::new(Line::from(vec![
-        Span::styled(f1_val, if f1_active { Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Theme::TEXT_PRIMARY) }),
-    ])).block(f1_block);
+    let f1_para = Paragraph::new(Line::from(vec![Span::styled(
+        f1_val,
+        if f1_active {
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Theme::TEXT_PRIMARY)
+        },
+    )]))
+    .block(f1_block);
     frame.render_widget(f1_para, vertical_chunks[1]);
 
     // Field 2: Pairing Address (Optional)
     let f2_active = app.adb_modal_field_index == 1;
     let f2_border_style = if f2_active {
-        Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Theme::INACTIVE_BORDER)
     };
@@ -97,21 +111,35 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .border_style(f2_border_style);
 
     let f2_val = if app.adb_pair_ip_port.is_empty() {
-        if f2_active { "█" } else { "192.168.1.50:37123" }
+        if f2_active {
+            "█"
+        } else {
+            "192.168.1.50:37123"
+        }
     } else if f2_active {
         &format!("{}█", app.adb_pair_ip_port)
     } else {
         &app.adb_pair_ip_port
     };
-    let f2_para = Paragraph::new(Line::from(vec![
-        Span::styled(f2_val, if f2_active { Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Theme::TEXT_PRIMARY) }),
-    ])).block(f2_block);
+    let f2_para = Paragraph::new(Line::from(vec![Span::styled(
+        f2_val,
+        if f2_active {
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Theme::TEXT_PRIMARY)
+        },
+    )]))
+    .block(f2_block);
     frame.render_widget(f2_para, vertical_chunks[2]);
 
     // Field 3: Pairing Code (Optional)
     let f3_active = app.adb_modal_field_index == 2;
     let f3_border_style = if f3_active {
-        Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Theme::INACTIVE_BORDER)
     };
@@ -123,15 +151,27 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .border_style(f3_border_style);
 
     let f3_val = if app.adb_pair_code.is_empty() {
-        if f3_active { "█" } else { "e.g. 123456" }
+        if f3_active {
+            "█"
+        } else {
+            "e.g. 123456"
+        }
     } else if f3_active {
         &format!("{}█", app.adb_pair_code)
     } else {
         &app.adb_pair_code
     };
-    let f3_para = Paragraph::new(Line::from(vec![
-        Span::styled(f3_val, if f3_active { Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Theme::TEXT_PRIMARY) }),
-    ])).block(f3_block);
+    let f3_para = Paragraph::new(Line::from(vec![Span::styled(
+        f3_val,
+        if f3_active {
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Theme::TEXT_PRIMARY)
+        },
+    )]))
+    .block(f3_block);
     frame.render_widget(f3_para, vertical_chunks[3]);
 
     // Instructions footer

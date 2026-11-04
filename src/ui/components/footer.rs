@@ -45,14 +45,17 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled("[Enter] ", key_style),
         Span::styled("Run", desc_style),
         Span::styled(" │ ", sep_style),
-        Span::styled("[m] ", key_style),
-        Span::styled("View Mode", desc_style),
+        Span::styled("[p] ", key_style),
+        Span::styled("Project", desc_style),
         Span::styled(" │ ", sep_style),
-        Span::styled("[1/2/3] ", key_style),
-        Span::styled("Toggle Panes", desc_style),
+        Span::styled("[y/Y] ", key_style),
+        Span::styled("Copy", desc_style),
+        Span::styled(" │ ", sep_style),
+        Span::styled("[m] ", key_style),
+        Span::styled("View", desc_style),
         Span::styled(" │ ", sep_style),
         Span::styled("[w] ", key_style),
-        Span::styled("Wi-Fi ADB", desc_style),
+        Span::styled("ADB", desc_style),
         Span::styled(" │ ", sep_style),
         Span::styled("[v] ", key_style),
         Span::styled("Variant", desc_style),
@@ -74,7 +77,12 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         ),
     ];
 
-    if let Some(ref app_id) = app.project.application_id {
+    if app.project_loading {
+        info_spans.push(Span::styled(
+            " loading…",
+            Style::default().fg(Theme::WARNING),
+        ));
+    } else if let Some(ref app_id) = app.project.application_id {
         info_spans.push(Span::styled(
             format!(" ({app_id})"),
             Style::default().fg(Theme::TEXT_MUTED),

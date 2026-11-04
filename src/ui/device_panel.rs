@@ -14,7 +14,10 @@ use crate::ui::theme::Theme;
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Devices;
 
-    let title = format!(" Connected Devices ({}) │ [w] Wi-Fi ADB ", app.devices.len());
+    let title = format!(
+        " Connected Devices ({}) │ [w] Wi-Fi ADB ",
+        app.devices.len()
+    );
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -23,12 +26,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .border_style(Theme::border_style(is_focused));
 
     if app.devices.is_empty() {
-        let empty_item = ListItem::new(Line::from(vec![
-            Span::styled(
-                "  No devices connected. Plug in a device or press [w] for Wi-Fi ADB.",
-                Style::default().fg(Theme::TEXT_MUTED),
-            ),
-        ]));
+        let empty_item = ListItem::new(Line::from(vec![Span::styled(
+            "  No devices connected. Plug in a device or press [w] for Wi-Fi ADB.",
+            Style::default().fg(Theme::TEXT_MUTED),
+        )]));
         let list = List::new(vec![empty_item]).block(block);
         frame.render_widget(list, area);
         return;
@@ -53,13 +54,19 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             let mut spans = Vec::new();
 
             // Selection indicator
-            let cursor = if is_selected && is_focused { "▶ " } else { "  " };
+            let cursor = if is_selected && is_focused {
+                "▶ "
+            } else {
+                "  "
+            };
             spans.push(Span::styled(cursor, Style::default().fg(Theme::ACCENT)));
 
             // Bullet icon
             spans.push(Span::styled(
                 format!("{status_bullet} "),
-                Style::default().fg(bullet_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(bullet_color)
+                    .add_modifier(Modifier::BOLD),
             ));
 
             // Device model name or serial
@@ -70,7 +77,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             };
 
             let name_style = if is_selected {
-                Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Theme::TEXT_PRIMARY)
             };
@@ -86,7 +95,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             if is_selected {
                 spans.push(Span::styled(
                     " [ACTIVE]",
-                    Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::SUCCESS)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
 
@@ -94,7 +105,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             if device.state != DeviceState::Device {
                 spans.push(Span::styled(
                     format!(" [{}]", device.state),
-                    Style::default().fg(Theme::WARNING).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::WARNING)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
 

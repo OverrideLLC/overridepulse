@@ -158,10 +158,10 @@ pub fn render(frame: &mut Frame, app: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::android::{Device, DeviceState, LogEntry, LogLevel};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-    use crate::android::{Device, DeviceState, LogEntry, LogLevel};
 
     #[test]
     fn test_render_default_layout() {

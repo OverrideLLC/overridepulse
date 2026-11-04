@@ -12,10 +12,16 @@ use crate::ui::theme::Theme;
 /// Formats the parity navigation bar showing which console panes are active:
 /// `[m] View │ [1] Simplified (ON/OFF) │ [2] Build (ON/OFF) │ [3] Logcat (ON/OFF)`
 pub fn console_parity_bar(app: &AppState) -> String {
-    let s_status = if app.show_simplified_pane { "ON" } else { "OFF" };
+    let s_status = if app.show_simplified_pane {
+        "ON"
+    } else {
+        "OFF"
+    };
     let b_status = if app.show_build_pane { "ON" } else { "OFF" };
     let l_status = if app.show_logcat_pane { "ON" } else { "OFF" };
-    format!("[m] View │ [1] Simplified ({s_status}) │ [2] Build ({b_status}) │ [3] Logcat ({l_status})")
+    format!(
+        "[m] View │ [1] Simplified ({s_status}) │ [2] Build ({b_status}) │ [3] Logcat ({l_status})"
+    )
 }
 
 /// Renders the Simplified Status pane with status card, live timer & ETA,
@@ -47,7 +53,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(card_height), // Status & Gauge
-            Constraint::Min(2),             // Events history
+            Constraint::Min(2),              // Events history
         ])
         .split(inner);
 
@@ -66,7 +72,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .split(status_area);
 
     // Line 1: State line
-    let state_line = if app.process_state.is_running {
+    let state_line = if app.project_loading {
+        Line::from(vec![Span::styled(
+            "⏳ Loading project…",
+            Style::default()
+                .fg(Theme::WARNING)
+                .add_modifier(Modifier::BOLD),
+        )])
+    } else if app.process_state.is_running {
         let spinner = app.process_state.spinner_char();
         let desc = app
             .process_state
@@ -110,24 +123,19 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             ])
         }
     } else {
-        Line::from(vec![
-            Span::styled(
-                "🟢 Ready / Idle",
-                Style::default()
-                    .fg(Theme::SUCCESS)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
+        Line::from(vec![Span::styled(
+            "🟢 Ready / Idle",
+            Style::default()
+                .fg(Theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        )])
     };
     frame.render_widget(Paragraph::new(state_line), status_subchunks[0]);
 
     // Line 2: Timer & ETA
     let timer_eta = app.process_state.elapsed_and_eta_display();
     let timer_line = Line::from(vec![
-        Span::styled(
-            "⏱  ",
-            Style::default().fg(Theme::WARNING),
-        ),
+        Span::styled("⏱  ", Style::default().fg(Theme::WARNING)),
         Span::styled(
             timer_eta,
             Style::default()
@@ -179,26 +187,22 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         ])
         .split(events_area);
 
-    let header_line = Line::from(vec![
-        Span::styled(
-            "📋 Recent Operations:",
-            Style::default()
-                .fg(Theme::TEXT_MUTED)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    let header_line = Line::from(vec![Span::styled(
+        "📋 Recent Operations:",
+        Style::default()
+            .fg(Theme::TEXT_MUTED)
+            .add_modifier(Modifier::BOLD),
+    )]);
     frame.render_widget(Paragraph::new(header_line), events_inner_chunks[0]);
 
     let list_area = events_inner_chunks[1];
     let visible_items = list_area.height as usize;
 
     if app.simplified_events.is_empty() {
-        let empty_item = ListItem::new(Line::from(vec![
-            Span::styled(
-                "  No completed operations yet. Press [b], [r], [k], etc.",
-                Style::default().fg(Theme::TEXT_MUTED),
-            ),
-        ]));
+        let empty_item = ListItem::new(Line::from(vec![Span::styled(
+            "  No completed operations yet. Press [b], [r], [k], etc.",
+            Style::default().fg(Theme::TEXT_MUTED),
+        )]));
         frame.render_widget(List::new(vec![empty_item]), list_area);
     } else {
         let items: Vec<ListItem> = app
@@ -214,9 +218,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 } else {
                     Style::default().fg(Theme::TEXT_PRIMARY)
                 };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("  {event_str}"), style),
-                ]))
+                ListItem::new(Line::from(vec![Span::styled(
+                    format!("  {event_str}"),
+                    style,
+                )]))
             })
             .collect();
 

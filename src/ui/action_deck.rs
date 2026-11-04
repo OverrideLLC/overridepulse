@@ -31,7 +31,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .enumerate()
         .map(|(idx, action)| {
             let is_selected = idx == app.selected_action_index;
-            let cursor = if is_selected && is_focused { "▶ " } else { "  " };
+            let cursor = if is_selected && is_focused {
+                "▶ "
+            } else {
+                "  "
+            };
 
             let title = action.title();
 
@@ -41,19 +45,20 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             if let Some(sc) = action.shortcut() {
                 spans.push(Span::styled(
                     format!("[{sc}] "),
-                    Style::default().fg(Theme::WARNING).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::WARNING)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else {
-                spans.push(Span::styled(
-                    "• ",
-                    Style::default().fg(Theme::TEXT_MUTED),
-                ));
+                spans.push(Span::styled("• ", Style::default().fg(Theme::TEXT_MUTED)));
             }
 
             spans.push(Span::styled(
                 title,
                 if is_selected {
-                    Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Theme::ACCENT)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Theme::TEXT_PRIMARY)
                 },

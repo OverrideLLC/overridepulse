@@ -1,7 +1,7 @@
+use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
-use regex::Regex;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
@@ -172,7 +172,11 @@ impl ActionContext {
         if gradlew.exists() {
             gradlew
         } else {
-            PathBuf::from(if cfg!(windows) { "gradle.bat" } else { "gradle" })
+            PathBuf::from(if cfg!(windows) {
+                "gradle.bat"
+            } else {
+                "gradle"
+            })
         }
     }
 
@@ -207,9 +211,8 @@ pub fn parse_gradle_progress(line: &str) -> Option<u8> {
         return None;
     }
 
-    let re = GRADLE_PROGRESS_RE.get_or_init(|| {
-        Regex::new(r"(\d{1,3})%").expect("Invalid progress regex")
-    });
+    let re = GRADLE_PROGRESS_RE
+        .get_or_init(|| Regex::new(r"(\d{1,3})%").expect("Invalid progress regex"));
 
     for caps in re.captures_iter(trimmed) {
         if let Some(m) = caps.get(1) {
@@ -336,9 +339,33 @@ fn collect_files_recursive(
             }
         } else if path.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with('.') && name != "intermediates" && name != "tmp" {
-                collect_files_recursive(&path, extension, results, max_depth - 1);
+            // APKs and AABs live under `build/outputs`. The rest of `build/`
+            // (intermediates, kotlin, caches) is large enough to stall the UI.
+            if name == "build" {
+                let outputs = path.join("outputs");
+                if outputs.is_dir() {
+                    collect_files_recursive(&outputs, extension, results, max_depth);
+                }
+                continue;
             }
+            if name.starts_with('.')
+                || matches!(
+                    name,
+                    "intermediates"
+                        | "tmp"
+                        | "node_modules"
+                        | "src"
+                        | "kotlin"
+                        | "generated"
+                        | "kspCaches"
+                        | "captures"
+                        | "cxx"
+                        | "externalNativeBuild"
+                )
+            {
+                continue;
+            }
+            collect_files_recursive(&path, extension, results, max_depth - 1);
         }
     }
 }
@@ -736,7 +763,8 @@ async fn execute_device_action_internal(
                 Ok(true) => {
                     let _ = sender.send(AppEvent::ProcessFinished(
                         true,
-                        "ADB TCP/IP 5555 enabled successfully. You can now connect via Wi-Fi.".to_string(),
+                        "ADB TCP/IP 5555 enabled successfully. You can now connect via Wi-Fi."
+                            .to_string(),
                     ));
                 }
                 _ => {
@@ -793,7 +821,15 @@ async fn execute_device_action_internal(
                 "Checking mobile data setting on device '{serial}'..."
             )));
             let get_cmd = Command::new(adb)
-                .args(["-s", serial, "shell", "settings", "get", "global", "mobile_data"])
+                .args([
+                    "-s",
+                    serial,
+                    "shell",
+                    "settings",
+                    "get",
+                    "global",
+                    "mobile_data",
+                ])
                 .output()
                 .await;
             let current = get_cmd
@@ -922,7 +958,15 @@ async fn execute_device_action_internal(
                 "Checking show taps setting on device '{serial}'..."
             )));
             let get_cmd = Command::new(adb)
-                .args(["-s", serial, "shell", "settings", "get", "system", "show_touches"])
+                .args([
+                    "-s",
+                    serial,
+                    "shell",
+                    "settings",
+                    "get",
+                    "system",
+                    "show_touches",
+                ])
                 .output()
                 .await;
             let current = get_cmd
@@ -1185,8 +1229,7 @@ async fn execute_build_and_install_debug(
                         "android.intent.category.LAUNCHER",
                         "1",
                     ]);
-                    let _ =
-                        run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
+                    let _ = run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
                 }
                 let _ = sender.send(AppEvent::ProcessFinished(
                     true,
@@ -1212,7 +1255,9 @@ async fn execute_build_and_install_debug(
             ));
         }
         Err(e) => {
-            let _ = sender.send(AppEvent::ProcessOutput(format!("Failed to execute ADB: {e}")));
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Failed to execute ADB: {e}"
+            )));
             let _ = sender.send(AppEvent::ProcessFinished(
                 false,
                 format!("ADB execution error: {e}"),
@@ -1271,7 +1316,9 @@ async fn execute_build_aab_and_deploy(
             return;
         }
         Err(e) => {
-            let _ = sender.send(AppEvent::ProcessOutput(format!("Failed to run Gradle: {e}")));
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Failed to run Gradle: {e}"
+            )));
             let _ = sender.send(AppEvent::ProcessFinished(
                 false,
                 format!("Gradle invocation error: {e}"),
@@ -1355,8 +1402,13 @@ async fn execute_build_aab_and_deploy(
         &format!("--device-id={}", ctx.serial),
     ]);
 
-    let install_res =
-        run_streaming_cmd(install_apks_cmd, "bundletool install-apks", sender, cancel_rx).await;
+    let install_res = run_streaming_cmd(
+        install_apks_cmd,
+        "bundletool install-apks",
+        sender,
+        cancel_rx,
+    )
+    .await;
 
     let _ = std::fs::remove_file(&apks_path);
 
@@ -1404,8 +1456,7 @@ async fn execute_build_aab_and_deploy(
                         "android.intent.category.LAUNCHER",
                         "1",
                     ]);
-                    let _ =
-                        run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
+                    let _ = run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
                 }
                 let _ = sender.send(AppEvent::ProcessFinished(
                     true,
@@ -1529,7 +1580,9 @@ async fn execute_force_stop(
             ));
         }
         Err(e) => {
-            let _ = sender.send(AppEvent::ProcessOutput(format!("ADB am force-stop error: {e}")));
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "ADB am force-stop error: {e}"
+            )));
             let _ = sender.send(AppEvent::ProcessFinished(
                 false,
                 format!("ADB execution error: {e}"),
@@ -1706,7 +1759,13 @@ async fn execute_stop_gradle_daemons(
     #[cfg(windows)]
     {
         let mut taskkill = Command::new("taskkill");
-        taskkill.args(["/F", "/FI", "IMAGENAME eq java.exe", "/FI", "WINDOWTITLE eq GradleDaemon*"]);
+        taskkill.args([
+            "/F",
+            "/FI",
+            "IMAGENAME eq java.exe",
+            "/FI",
+            "WINDOWTITLE eq GradleDaemon*",
+        ]);
         let _ = taskkill.status().await;
     }
 
@@ -1785,8 +1844,12 @@ mod tests {
         assert_eq!(QuickAction::from_char('z'), None);
 
         assert_eq!(QuickAction::all().len(), 8);
-        assert!(QuickAction::BuildAndInstallDebug.display_label().starts_with("[b] "));
-        assert!(QuickAction::ClearAppData.display_label().starts_with("    "));
+        assert!(QuickAction::BuildAndInstallDebug
+            .display_label()
+            .starts_with("[b] "));
+        assert!(QuickAction::ClearAppData
+            .display_label()
+            .starts_with("    "));
     }
 
     #[test]
@@ -1957,7 +2020,8 @@ mod tests {
 
     #[test]
     fn test_find_app_id_near_apk() {
-        let temp_dir = std::env::temp_dir().join(format!("overridepulse_apk_near_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("overridepulse_apk_near_{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
 
         let apk_dir = temp_dir.join("composeApp/build/outputs/apk/debug");

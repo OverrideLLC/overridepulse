@@ -37,11 +37,13 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     } else {
         " [Follow: OFF]"
     };
+    let copy_tag = " [y] Copy";
 
     let parity = console_parity_bar(app);
     let title = format!(
-        " [3] Logcat ({}){}{}{} │ {parity} ",
+        " [3] Logcat ({}){}{}{}{} │ {parity} ",
         app.logcat_entries.len(),
+        copy_tag,
         app_filter_tag,
         search_tag,
         follow_tag
@@ -57,24 +59,21 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
 
-    // Filter entries by app ID and search query if enabled
-    let app_id_filter = if app.logcat_filter_by_app {
-        app.project.application_id.as_deref()
-    } else {
-        None
-    };
-
+    // The stream is already scoped to the app UID/PID. A second filter that
+    // requires the package name inside each line hides ordinary app logs
+    // (`D MyApp: onCreate` does not contain `com.example.app`).
     let filtered_entries: Vec<&LogEntry> = app
         .logcat_entries
         .iter()
-        .filter(|e| e.matches_filter(&app.search_query, None, None, app_id_filter))
+        .filter(|e| e.matches_filter(&app.search_query, None, None, None))
         .collect();
 
     let total_lines = filtered_entries.len();
     let start_idx = if app.auto_scroll_logcat {
         total_lines.saturating_sub(visible_height)
     } else {
-        app.logcat_scroll.min(total_lines.saturating_sub(visible_height))
+        app.logcat_scroll
+            .min(total_lines.saturating_sub(visible_height))
     };
 
     let lines: Vec<Line> = filtered_entries
@@ -113,7 +112,10 @@ fn format_logcat_line(entry: &LogEntry) -> Line<'_> {
 
     // Timestamp
     if let Some(ts) = &entry.timestamp {
-        spans.push(Span::styled(format!("{ts} "), Style::default().fg(Theme::TEXT_MUTED)));
+        spans.push(Span::styled(
+            format!("{ts} "),
+            Style::default().fg(Theme::TEXT_MUTED),
+        ));
     }
 
     // PID
