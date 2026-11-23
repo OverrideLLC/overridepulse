@@ -39,11 +39,11 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(vec![Span::styled("Navigation & Layout", title_style)]),
         Line::from(vec![
             Span::styled("  Tab / Shift+Tab   ", key_style),
-            Span::raw("Cycle panels (Devices → Device Controls → Actions → Console)"),
+            Span::raw("Cycle panels (Actions ↔ Console, or Devices ↔ ADB Controls)"),
         ]),
         Line::from(vec![
-            Span::styled("  ↑ / ↓ or k / j    ", key_style),
-            Span::raw("Navigate active list or scroll console logs"),
+            Span::styled("  ←/→/↑/↓           ", key_style),
+            Span::raw("Navigate action/control grid cards, devices, or scroll logs"),
         ]),
         Line::from(vec![
             Span::styled("  1 / 2 / 3         ", key_style),
@@ -54,12 +54,20 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("Cycle console presets (Simplified / Build / Logcat / Parity / Triple)"),
         ]),
         Line::from(vec![
+            Span::styled("  d                 ", key_style),
+            Span::raw("Open / close separate Devices & ADB Controls view"),
+        ]),
+        Line::from(vec![
             Span::styled("  w                 ", key_style),
             Span::raw("Open ADB Wireless Pair & Connect modal"),
         ]),
         Line::from(vec![
             Span::styled("  v                 ", key_style),
-            Span::raw("Cycle active build variant (debug/release/...)"),
+            Span::raw("Cycle active Android build variant (debug/release/...)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  t                 ", key_style),
+            Span::raw("Cycle KMP target (Android / JVM / WasmJS / JS)"),
         ]),
         Line::from(vec![
             Span::styled("  p                 ", key_style),
@@ -84,11 +92,11 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  b                 ", key_style),
-            Span::raw("Build and install debug APK (auto-launches main activity)"),
+            Span::raw("Build/install debug APK (Android) or compile active KMP target"),
         ]),
         Line::from(vec![
             Span::styled("  r                 ", key_style),
-            Span::raw("Relaunch main launcher activity"),
+            Span::raw("Relaunch activity (Android) or run / dev server for KMP target"),
         ]),
         Line::from(vec![
             Span::styled("  k                 ", key_style),

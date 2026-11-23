@@ -5,9 +5,18 @@
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
 [![GitHub](https://img.shields.io/github/v/release/OverrideLLC/overridepulse?include_prereleases&label=release)](https://github.com/OverrideLLC/overridepulse/releases)
 
-> **Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)**
+> **Ultralightweight TUI for Android, Kotlin Multiplatform (KMP) & Gradle development**
 
-OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) designed to streamline Android and Gradle development workflows. Stop wrestling with bloated IDE windows or typing repetitive Gradle/ADB commands—manage devices, build variants, logcat streams, ADB hardware toggles, and Gradle daemons with single-key shortcuts.
+OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) designed to streamline Android, Kotlin Multiplatform, and Gradle development workflows. Stop wrestling with bloated IDE windows or typing repetitive Gradle/ADB commands—compile and run Android, JVM/Desktop, WasmJS, and JS targets, manage ADB devices in a dedicated view, inspect logcat streams, and control Gradle daemons with single-key shortcuts.
+
+---
+
+## 🌟 What's New in v0.3.0
+
+- 🧩 **Kotlin Multiplatform (KMP) Support (`[t]`)**: Automatically detects `Android`, `JVM / Compose Desktop`, `WasmJS`, and `JS` targets across Gradle modules. Press `[t]` to switch targets and run host builds, dev servers (`wasmJsBrowserDevelopmentRun`, `jsBrowserDevelopmentRun`, `run`), distribution bundles, and tests without requiring an attached ADB device.
+- 🗂 **Card-Grid Actions & Simplified Default Layout**: Actions and ADB Controls render in a responsive rounded card grid (`←/→/↑/↓`), while the startup screen focuses solely on the Actions grid and `[1] Status` pane.
+- 📱 **Separate Devices & ADB View (`[d]`)**: Devices and ADB hardware controls now live in a dedicated view toggled with `[d]` (and dismissed with `d` or `Esc`), keeping the main workspace uncluttered.
+- 🛑 **Clean Dev-Server Cancellation**: Cancelling running tasks with `Esc` or `Ctrl+X` terminates the Unix process group cleanly so dev servers don't linger in the background.
 
 ---
 
@@ -120,28 +129,30 @@ overridepulse --tick-rate 100
 
 | Key | Action |
 |---|---|
-| `Tab` / `Shift+Tab` | Cycle focus between panels (`Devices` → `Device Controls` → `Actions` → `Console`) |
-| `↑` / `↓` or `k` / `j` | Navigate active list or scroll console logs |
-| `1` | Toggle Simplified console pane |
+| `Tab` / `Shift+Tab` | Cycle focus between panels (`Actions` ↔ `Console`, or `Devices` ↔ `ADB Controls`) |
+| `←` / `→` / `↑` / `↓` | Navigate card grid, device list, or scroll console logs |
+| `1` | Toggle Simplified status pane |
 | `2` | Toggle Raw Build Output pane |
 | `3` | Toggle Live Logcat pane |
 | `m` or `l` | Cycle console view presets (Simplified / Build / Logcat / Parity / Triple) |
+| `t` | Cycle KMP target (`Android` / `JVM` / `WasmJS` / `JS`) |
+| `d` | Open / close separate Devices & ADB Controls view |
 | `w` | Open ADB Wireless Pair & Connect modal |
-| `v` | Cycle active build variant (`debug`, `release`, etc.) |
-| `p` | Switch Android project (current, siblings, and one nested level) |
+| `v` | Cycle active Android build variant (`debug`, `release`, etc.) |
+| `p` | Switch Gradle / KMP project (current, siblings, and one nested level) |
 | `y` / `Y` | Copy logcat (`y`) or build output (`Y`) to the clipboard |
 | `f` | Toggle logcat between this app and all device logs |
 | `?` | Toggle help overlay modal |
 | `q` / `Ctrl+C` | Quit OverridePulse |
-| `Esc` / `Ctrl+X` | Cancel running background task or dismiss modal |
+| `Esc` / `Ctrl+X` | Cancel running background task, close Devices view, or dismiss modal |
 
 ### Actions & Device Controls
 
 | Key | Action | Description |
 |---|---|---|
 | `Enter` / `Space` | **Execute Highlighted Action** | Executes selected Action or Device Control / Selects device |
-| `[b]` | **Build & Install Debug APK** | Runs `./gradlew assembleDebug`, installs via ADB, and auto-launches |
-| `[r]` | **Relaunch Activity** | Stops and relaunches main launcher activity (`am start -W`) |
+| `[b]` | **Build / Compile Target** | Android: `assembleDebug` + install; KMP: compiles active JVM/WasmJS/JS target |
+| `[r]` | **Run / Relaunch** | Android: relaunches main activity; KMP: runs app or dev server |
 | `[k]` | **Force Stop App** | Terminates app process immediately (`adb shell am force-stop`) |
 | `[u]` | **Uninstall App** | Uninstalls package from device (`adb uninstall`) |
 | `[g]` | **Stop All Gradle Daemons** | Stops daemons with `./gradlew --stop` and cleans orphaned processes |

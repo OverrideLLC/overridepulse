@@ -24,13 +24,12 @@ pub fn console_parity_bar(app: &AppState) -> String {
     )
 }
 
-/// Renders the Simplified Status pane with status card, live timer & ETA,
-/// progress gauge, and history of completed operations.
+/// Renders the Simplified Status pane with a clean status header,
+/// live timer/progress only while active, and recent operation history.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Console || app.current_panel == Panel::Output;
 
-    let parity = console_parity_bar(app);
-    let title = format!(" [1] Simplified Status │ {parity} ");
+    let title = " [1] Status │ [2] Build  [3] Logcat ";
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -43,52 +42,49 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 4 || inner.width < 10 {
+    if inner.height < 3 || inner.width < 10 {
         return;
     }
 
-    // Split inner vertically into status card / progress (top) and history list (bottom)
-    let card_height = if inner.height >= 8 { 4 } else { 3 };
+    // Show timer + progress gauge only while a task is actively running.
+    let card_height = if app.process_state.is_running && inner.height >= 7 {
+        4
+    } else if app.process_state.is_running {
+        2
+    } else {
+        1
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(card_height), // Status & Gauge
-            Constraint::Min(2),              // Events history
+            Constraint::Length(card_height),
+            Constraint::Min(1),
         ])
         .split(inner);
 
     let status_area = chunks[0];
     let events_area = chunks[1];
 
-    // 1. Status Card & Progress Gauge
-    let status_subchunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // State line
-            Constraint::Length(1), // Timer & ETA line
-            Constraint::Length(1), // Gauge
-            Constraint::Min(0),
-        ])
-        .split(status_area);
+    if app.process_state.is_running {
+        let status_subchunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(status_area);
 
-    // Line 1: State line
-    let state_line = if app.project_loading {
-        Line::from(vec![Span::styled(
-            "⏳ Loading project…",
-            Style::default()
-                .fg(Theme::WARNING)
-                .add_modifier(Modifier::BOLD),
-        )])
-    } else if app.process_state.is_running {
         let spinner = app.process_state.spinner_char();
         let desc = app
             .process_state
             .task_description
             .as_deref()
             .unwrap_or("Running task...");
-        Line::from(vec![
+        let state_line = Line::from(vec![
             Span::styled(
-                format!("{spinner} ⚡ Running: "),
+                format!("{spinner} Running: "),
                 Style::default()
                     .fg(Theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
@@ -99,111 +95,77 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                     .fg(Theme::TEXT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
-        ])
-    } else if let Some(ref msg) = app.status_message {
-        if msg.starts_with("Failed") || msg.starts_with("❌") {
-            Line::from(vec![
-                Span::styled(
-                    "❌ Failed: ",
-                    Style::default()
-                        .fg(Theme::ERROR)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(msg, Style::default().fg(Theme::TEXT_PRIMARY)),
-            ])
+        ]);
+        frame.render_widget(Paragraph::new(state_line), status_subchunks[0]);
+
+        let timer_eta = app.process_state.elapsed_and_eta_display();
+        let timer_line = Line::from(vec![
+            Span::styled("⏱ ", Style::default().fg(Theme::WARNING)),
+            Span::styled(timer_eta, Style::default().fg(Theme::WARNING)),
+        ]);
+        frame.render_widget(Paragraph::new(timer_line), status_subchunks[1]);
+
+        let pct = app.process_state.progress_percent.unwrap_or(0);
+        let gauge_label = match app.process_state.progress_percent {
+            Some(p) => format!("{p}%"),
+            None => "In progress…".to_string(),
+        };
+        let gauge = Gauge::default()
+            .gauge_style(
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .bg(Color::Rgb(30, 36, 48)),
+            )
+            .percent(pct as u16)
+            .label(Span::styled(
+                gauge_label,
+                Style::default()
+                    .fg(Theme::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        frame.render_widget(gauge, status_subchunks[2]);
+    } else {
+        let state_line = if app.project_loading {
+            Line::from(vec![Span::styled(
+                "⏳ Loading project…",
+                Style::default()
+                    .fg(Theme::WARNING)
+                    .add_modifier(Modifier::BOLD),
+            )])
+        } else if let Some(ref msg) = app.status_message {
+            if msg.starts_with("Failed") || msg.starts_with('❌') {
+                Line::from(vec![
+                    Span::styled(
+                        "❌ ",
+                        Style::default()
+                            .fg(Theme::ERROR)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(msg, Style::default().fg(Theme::TEXT_PRIMARY)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("● ", Style::default().fg(Theme::SUCCESS)),
+                    Span::styled(msg, Style::default().fg(Theme::TEXT_PRIMARY)),
+                ])
+            }
         } else {
             Line::from(vec![
-                Span::styled(
-                    "🟢 Ready / Idle: ",
-                    Style::default()
-                        .fg(Theme::SUCCESS)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(msg, Style::default().fg(Theme::TEXT_MUTED)),
+                Span::styled("● ", Style::default().fg(Theme::SUCCESS)),
+                Span::styled("Ready", Style::default().fg(Theme::TEXT_PRIMARY)),
             ])
-        }
-    } else {
-        Line::from(vec![Span::styled(
-            "🟢 Ready / Idle",
-            Style::default()
-                .fg(Theme::SUCCESS)
-                .add_modifier(Modifier::BOLD),
-        )])
-    };
-    frame.render_widget(Paragraph::new(state_line), status_subchunks[0]);
+        };
+        frame.render_widget(Paragraph::new(state_line), status_area);
+    }
 
-    // Line 2: Timer & ETA
-    let timer_eta = app.process_state.elapsed_and_eta_display();
-    let timer_line = Line::from(vec![
-        Span::styled("⏱  ", Style::default().fg(Theme::WARNING)),
-        Span::styled(
-            timer_eta,
-            Style::default()
-                .fg(Theme::WARNING)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(timer_line), status_subchunks[1]);
-
-    // Line 3: Progress Gauge
-    let pct = app.process_state.progress_percent.unwrap_or(0);
-    let gauge_pct = if app.process_state.is_running {
-        pct as u16
-    } else {
-        0
-    };
-
-    let gauge_label = if app.process_state.is_running {
-        if let Some(p) = app.process_state.progress_percent {
-            format!("{p}%")
-        } else {
-            "Progress: In Progress".to_string()
-        }
-    } else {
-        "Idle".to_string()
-    };
-
-    let gauge = Gauge::default()
-        .gauge_style(
-            Style::default()
-                .fg(Theme::ACCENT)
-                .bg(Color::Rgb(30, 36, 48)),
-        )
-        .percent(gauge_pct)
-        .label(Span::styled(
-            gauge_label,
-            Style::default()
-                .fg(Theme::TEXT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ));
-    frame.render_widget(gauge, status_subchunks[2]);
-
-    // 2. Events & Operations History
-    let events_inner_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // Header label
-            Constraint::Min(1),    // Items
-        ])
-        .split(events_area);
-
-    let header_line = Line::from(vec![Span::styled(
-        "📋 Recent Operations:",
-        Style::default()
-            .fg(Theme::TEXT_MUTED)
-            .add_modifier(Modifier::BOLD),
-    )]);
-    frame.render_widget(Paragraph::new(header_line), events_inner_chunks[0]);
-
-    let list_area = events_inner_chunks[1];
-    let visible_items = list_area.height as usize;
-
+    // Recent operations list
+    let visible_items = events_area.height as usize;
     if app.simplified_events.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
-            "  No completed operations yet. Press [b], [r], [k], etc.",
+            "  No operations yet · [b] build  [r] run  [t] target",
             Style::default().fg(Theme::TEXT_MUTED),
         )]));
-        frame.render_widget(List::new(vec![empty_item]), list_area);
+        frame.render_widget(List::new(vec![empty_item]), events_area);
     } else {
         let items: Vec<ListItem> = app
             .simplified_events
@@ -225,6 +187,6 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             })
             .collect();
 
-        frame.render_widget(List::new(items), list_area);
+        frame.render_widget(List::new(items), events_area);
     }
 }

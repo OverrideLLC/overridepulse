@@ -116,6 +116,7 @@ pub struct AppState {
     pub adb_connect_ip_port: String,
     pub adb_modal_field_index: usize,
 
+    pub devices_view_active: bool,
     pub show_simplified_pane: bool,
     pub show_build_pane: bool,
     pub show_logcat_pane: bool,
@@ -142,6 +143,8 @@ pub struct AppState {
     pub actions: Vec<QuickAction>,
     pub selected_action_index: usize,
 
+    pub terminal_width: u16,
+
     pub console_scroll: usize,
     pub logcat_scroll: usize,
     pub auto_scroll_console: bool,
@@ -158,6 +161,7 @@ impl AppState {
     pub fn new(root_path: PathBuf) -> Self {
         let mut app = Self::blank(root_path.clone());
         app.project = AndroidProject::detect(&root_path);
+        app.sync_actions_for_active_target();
         if !app.project.is_valid() {
             app.nearby_projects = AndroidProject::discover_nearby_projects(&root_path, 3);
             app.project_selector_active = true;
@@ -195,12 +199,13 @@ impl AppState {
             adb_pair_code: String::new(),
             adb_connect_ip_port: "192.168.1.50:5555".to_string(),
             adb_modal_field_index: 0,
+            devices_view_active: false,
             show_simplified_pane: true,
             show_build_pane: false,
-            show_logcat_pane: true,
+            show_logcat_pane: false,
             simplified_events: VecDeque::with_capacity(DEFAULT_MAX_SIMPLIFIED_EVENTS),
             max_simplified_events: DEFAULT_MAX_SIMPLIFIED_EVENTS,
-            current_panel: Panel::Devices,
+            current_panel: Panel::Actions,
             view_mode: ViewMode::BuildOutput,
             search_active: false,
             search_query: String::new(),
@@ -214,6 +219,7 @@ impl AppState {
             status_message: Some("Ready".to_string()),
             actions: QuickAction::all().to_vec(),
             selected_action_index: 0,
+            terminal_width: 120,
             console_scroll: 0,
             logcat_scroll: 0,
             auto_scroll_console: true,
@@ -378,6 +384,7 @@ impl AppState {
         let switched = path != self.project.root_path;
         self.project = project;
         self.project_loading = false;
+        self.sync_actions_for_active_target();
         if switched {
             self.clear_logcat();
         }
@@ -390,6 +397,45 @@ impl AppState {
             self.nearby_projects.sort();
         }
         self.status_message = Some(format!("Project: {name}"));
+    }
+
+    pub fn sync_actions_for_active_target(&mut self) {
+        self.actions = QuickAction::for_target(self.project.active_target());
+        if self.selected_action_index >= self.actions.len() {
+            self.selected_action_index = 0;
+        }
+        if !self.devices_view_active
+            && matches!(self.current_panel, Panel::Devices | Panel::DeviceControls)
+        {
+            self.current_panel = Panel::Actions;
+        }
+    }
+
+    pub fn toggle_devices_view(&mut self) {
+        self.devices_view_active = !self.devices_view_active;
+        if self.devices_view_active {
+            self.current_panel = Panel::Devices;
+            self.status_message = Some("Devices & ADB view".to_string());
+        } else {
+            self.current_panel = Panel::Actions;
+            self.status_message = Some("Ready".to_string());
+        }
+    }
+
+    pub fn next_target(&mut self) {
+        if self.project.targets.is_empty() {
+            self.status_message = Some("Target: Android (default)".to_string());
+            return;
+        }
+        self.project.active_target_index =
+            (self.project.active_target_index + 1) % self.project.targets.len();
+        if let Some(target) = self.project.active_target().cloned() {
+            self.project.active_module = Some(target.module.clone());
+            let label = target.display_label();
+            self.status_message = Some(format!("Target: {label}"));
+            self.append_simplified_event(format!("🎯 Target: {label}"));
+        }
+        self.sync_actions_for_active_target();
     }
 
     pub fn begin_project_switch(&mut self, path: &std::path::Path) -> u64 {
@@ -553,22 +599,33 @@ impl AppState {
         self.process_state.tick();
     }
 
+    fn visible_panels(&self) -> Vec<Panel> {
+        if self.devices_view_active {
+            vec![Panel::Devices, Panel::DeviceControls]
+        } else {
+            vec![Panel::Actions, Panel::Console]
+        }
+    }
+
     pub fn next_panel(&mut self) {
-        self.current_panel = match self.current_panel {
-            Panel::Devices => Panel::DeviceControls,
-            Panel::DeviceControls => Panel::Actions,
-            Panel::Actions => Panel::Console,
-            Panel::Console | Panel::Output | Panel::Logcat => Panel::Devices,
+        let panels = self.visible_panels();
+        let normalized = match self.current_panel {
+            Panel::Output | Panel::Logcat => Panel::Console,
+            other => other,
         };
+        let idx = panels.iter().position(|p| *p == normalized).unwrap_or(0);
+        self.current_panel = panels[(idx + 1) % panels.len()];
     }
 
     pub fn prev_panel(&mut self) {
-        self.current_panel = match self.current_panel {
-            Panel::Devices => Panel::Console,
-            Panel::DeviceControls => Panel::Devices,
-            Panel::Actions => Panel::DeviceControls,
-            Panel::Console | Panel::Output | Panel::Logcat => Panel::Actions,
+        let panels = self.visible_panels();
+        let normalized = match self.current_panel {
+            Panel::Output | Panel::Logcat => Panel::Console,
+            other => other,
         };
+        let idx = panels.iter().position(|p| *p == normalized).unwrap_or(0);
+        let prev = if idx == 0 { panels.len() - 1 } else { idx - 1 };
+        self.current_panel = panels[prev];
     }
 
     pub fn select_next_device(&mut self) {
@@ -631,6 +688,42 @@ impl AppState {
         };
     }
 
+    pub fn actions_panel_width(&self) -> u16 {
+        self.terminal_width.saturating_sub(2)
+    }
+
+    pub fn device_controls_panel_width(&self) -> u16 {
+        (self.terminal_width.saturating_mul(65) / 100).saturating_sub(2)
+    }
+
+    pub fn actions_grid_cols(&self) -> usize {
+        grid_cols_for_width(self.actions_panel_width(), self.actions.len(), 4)
+    }
+
+    pub fn device_controls_grid_cols(&self) -> usize {
+        grid_cols_for_width(
+            self.device_controls_panel_width(),
+            DeviceControlAction::all().len(),
+            2,
+        )
+    }
+
+    pub fn move_left(&mut self) {
+        match self.current_panel {
+            Panel::Actions => self.select_prev_action(),
+            Panel::DeviceControls => self.select_prev_device_control(),
+            _ => {}
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        match self.current_panel {
+            Panel::Actions => self.select_next_action(),
+            Panel::DeviceControls => self.select_next_device_control(),
+            _ => {}
+        }
+    }
+
     pub fn scroll_up(&mut self) {
         match self.current_panel {
             Panel::Output | Panel::Console => {
@@ -642,8 +735,18 @@ impl AppState {
                 self.logcat_scroll = self.logcat_scroll.saturating_sub(1);
             }
             Panel::Devices => self.select_prev_device(),
-            Panel::DeviceControls => self.select_prev_device_control(),
-            Panel::Actions => self.select_prev_action(),
+            Panel::DeviceControls => {
+                let cols = self.device_controls_grid_cols();
+                let len = DeviceControlAction::all().len();
+                self.selected_device_control_index =
+                    step_grid_vertical(self.selected_device_control_index, len, cols, false);
+            }
+            Panel::Actions => {
+                let cols = self.actions_grid_cols();
+                let len = self.actions.len();
+                self.selected_action_index =
+                    step_grid_vertical(self.selected_action_index, len, cols, false);
+            }
         }
     }
 
@@ -668,8 +771,59 @@ impl AppState {
                 }
             }
             Panel::Devices => self.select_next_device(),
-            Panel::DeviceControls => self.select_next_device_control(),
-            Panel::Actions => self.select_next_action(),
+            Panel::DeviceControls => {
+                let cols = self.device_controls_grid_cols();
+                let len = DeviceControlAction::all().len();
+                self.selected_device_control_index =
+                    step_grid_vertical(self.selected_device_control_index, len, cols, true);
+            }
+            Panel::Actions => {
+                let cols = self.actions_grid_cols();
+                let len = self.actions.len();
+                self.selected_action_index =
+                    step_grid_vertical(self.selected_action_index, len, cols, true);
+            }
+        }
+    }
+}
+
+pub fn grid_cols_for_width(inner_width: u16, item_count: usize, max_cols: usize) -> usize {
+    if item_count <= 1 {
+        return 1;
+    }
+    let cols = if inner_width >= 96 && item_count >= 7 {
+        4
+    } else if inner_width >= 66 && item_count >= 3 {
+        3
+    } else if inner_width >= 38 {
+        2
+    } else {
+        1
+    };
+    cols.min(max_cols).min(item_count).max(1)
+}
+
+fn step_grid_vertical(index: usize, len: usize, cols: usize, forward: bool) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let cols = cols.max(1);
+    if forward {
+        if index + cols < len {
+            index + cols
+        } else {
+            index % cols
+        }
+    } else if index >= cols {
+        index - cols
+    } else {
+        let col = index % cols;
+        let last_row_start = ((len - 1) / cols) * cols;
+        let candidate = last_row_start + col;
+        if candidate < len {
+            candidate
+        } else {
+            candidate.saturating_sub(cols)
         }
     }
 }
@@ -695,31 +849,30 @@ mod tests {
     #[test]
     fn test_panel_cycling() {
         let mut app = AppState::new(PathBuf::from("."));
+        assert_eq!(app.current_panel, Panel::Actions);
+        assert!(!app.devices_view_active);
+
+        // Main screen cycles only between Actions and Console
+        app.next_panel();
+        assert_eq!(app.current_panel, Panel::Console);
+
+        app.next_panel();
+        assert_eq!(app.current_panel, Panel::Actions);
+
+        // Separate Devices & ADB view cycles between Devices and DeviceControls
+        app.toggle_devices_view();
+        assert!(app.devices_view_active);
         assert_eq!(app.current_panel, Panel::Devices);
 
         app.next_panel();
         assert_eq!(app.current_panel, Panel::DeviceControls);
 
-        app.next_panel();
-        assert_eq!(app.current_panel, Panel::Actions);
-
-        app.next_panel();
-        assert_eq!(app.current_panel, Panel::Console);
-
-        app.next_panel();
-        assert_eq!(app.current_panel, Panel::Devices);
-
-        app.prev_panel();
-        assert_eq!(app.current_panel, Panel::Console);
-
-        app.prev_panel();
-        assert_eq!(app.current_panel, Panel::Actions);
-
-        app.prev_panel();
-        assert_eq!(app.current_panel, Panel::DeviceControls);
-
         app.prev_panel();
         assert_eq!(app.current_panel, Panel::Devices);
+
+        app.toggle_devices_view();
+        assert!(!app.devices_view_active);
+        assert_eq!(app.current_panel, Panel::Actions);
     }
 
     #[test]
@@ -830,34 +983,28 @@ mod tests {
     #[test]
     fn test_parity_toggles_and_presets() {
         let mut app = AppState::new(PathBuf::from("."));
-        // Default: Simplified (true), Build (false), Logcat (true)
-        assert!(app.show_simplified_pane);
-        assert!(!app.show_build_pane);
-        assert!(app.show_logcat_pane);
-
-        // Cycle preset -> Triple Vista
-        app.cycle_console_preset();
-        assert!(app.show_simplified_pane);
-        assert!(app.show_build_pane);
-        assert!(app.show_logcat_pane);
-
-        // Cycle preset -> Solo Simplificada
-        app.cycle_console_preset();
+        // Default: Simplified (true), Build (false), Logcat (false)
         assert!(app.show_simplified_pane);
         assert!(!app.show_build_pane);
         assert!(!app.show_logcat_pane);
 
-        // Cannot toggle off the only active pane
-        app.toggle_simplified_pane();
-        assert!(app.show_simplified_pane);
-
-        // Toggle on build
-        app.toggle_build_pane();
-        assert!(app.show_build_pane);
-        // Now can toggle off simplified
-        app.toggle_simplified_pane();
+        // Cycle preset -> Solo Build
+        app.cycle_console_preset();
         assert!(!app.show_simplified_pane);
         assert!(app.show_build_pane);
+        assert!(!app.show_logcat_pane);
+
+        // Cannot toggle off the only active pane
+        app.toggle_build_pane();
+        assert!(app.show_build_pane);
+
+        // Toggle on simplified
+        app.toggle_simplified_pane();
+        assert!(app.show_simplified_pane);
+        // Now can toggle off build
+        app.toggle_build_pane();
+        assert!(!app.show_build_pane);
+        assert!(app.show_simplified_pane);
     }
 
     #[test]
@@ -897,5 +1044,59 @@ mod tests {
         assert!(app.select_device_by_serial("other-device-456"));
         assert_eq!(app.selected_device_index, 0);
         assert!(!app.select_device_by_serial("non-existent"));
+    }
+
+    #[test]
+    fn test_next_target_cycling_updates_actions_and_module() {
+        use crate::android::{KmpTarget, TargetPlatform};
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project.is_kmp = true;
+        app.project.targets = vec![
+            KmpTarget::android(":composeApp", false),
+            KmpTarget {
+                platform: TargetPlatform::WasmJs,
+                module: ":webApp".to_string(),
+                gradle_name: "wasmJs".to_string(),
+                is_kmp_target: true,
+                has_compose_desktop: false,
+                has_application_plugin: false,
+                has_browser: true,
+                has_nodejs: false,
+                is_library_only: false,
+            },
+        ];
+        app.project.active_target_index = 0;
+        app.sync_actions_for_active_target();
+        assert_eq!(app.selected_action(), Some(QuickAction::BuildAndInstallDebug));
+
+        app.next_target();
+        assert_eq!(app.project.active_target_index, 1);
+        assert_eq!(app.project.active_module.as_deref(), Some(":webApp"));
+        assert_eq!(app.selected_action(), Some(QuickAction::KmpCompileTarget));
+
+        app.next_target();
+        assert_eq!(app.project.active_target_index, 0);
+        assert_eq!(app.project.active_module.as_deref(), Some(":composeApp"));
+        assert_eq!(app.selected_action(), Some(QuickAction::BuildAndInstallDebug));
+    }
+
+    #[test]
+    fn test_grid_navigation_actions_and_controls() {
+        let mut app = AppState::new(PathBuf::from("."));
+        app.terminal_width = 120;
+        app.current_panel = Panel::Actions;
+        let cols = app.actions_grid_cols();
+        assert!(cols >= 2);
+
+        app.move_right();
+        assert_eq!(app.selected_action_index, 1);
+        app.move_left();
+        assert_eq!(app.selected_action_index, 0);
+
+        app.scroll_down();
+        assert_eq!(app.selected_action_index, cols);
+        app.scroll_up();
+        assert_eq!(app.selected_action_index, 0);
     }
 }

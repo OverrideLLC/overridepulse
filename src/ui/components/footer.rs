@@ -27,8 +27,8 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(64), // Shortcuts
-            Constraint::Percentage(36), // Project info & Variant
+            Constraint::Percentage(58), // Shortcuts
+            Constraint::Percentage(42), // Project & Target
         ])
         .split(inner);
 
@@ -38,34 +38,44 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let desc_style = Style::default().fg(Theme::TEXT_PRIMARY);
     let sep_style = Style::default().fg(Theme::TEXT_MUTED);
 
-    let shortcuts_line = Line::from(vec![
-        Span::styled(" [Tab] ", key_style),
-        Span::styled("Panel", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[Enter] ", key_style),
-        Span::styled("Run", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[p] ", key_style),
-        Span::styled("Project", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[y/Y] ", key_style),
-        Span::styled("Copy", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[m] ", key_style),
-        Span::styled("View", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[w] ", key_style),
-        Span::styled("ADB", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[v] ", key_style),
-        Span::styled("Variant", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[?] ", key_style),
-        Span::styled("Help", desc_style),
-        Span::styled(" │ ", sep_style),
-        Span::styled("[q] ", key_style),
-        Span::styled("Quit", desc_style),
-    ]);
+    let shortcuts_line = if app.devices_view_active {
+        Line::from(vec![
+            Span::styled(" [d/Esc] ", key_style),
+            Span::styled("Back", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[Tab] ", key_style),
+            Span::styled("Switch Pane", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[w] ", key_style),
+            Span::styled("Wi-Fi ADB", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[Enter] ", key_style),
+            Span::styled("Select / Run", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[q] ", key_style),
+            Span::styled("Quit", desc_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" [t] ", key_style),
+            Span::styled("Target", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[p] ", key_style),
+            Span::styled("Project", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[d] ", key_style),
+            Span::styled("Devices", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[1/2/3] ", key_style),
+            Span::styled("Views", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[?] ", key_style),
+            Span::styled("Help", desc_style),
+            Span::styled("  ", sep_style),
+            Span::styled("[q] ", key_style),
+            Span::styled("Quit", desc_style),
+        ])
+    };
 
     let mut info_spans = vec![
         Span::styled("📦 ", Style::default().fg(Theme::ACCENT)),
@@ -82,20 +92,26 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             " loading…",
             Style::default().fg(Theme::WARNING),
         ));
-    } else if let Some(ref app_id) = app.project.application_id {
+    } else if let Some(target) = app.project.active_target() {
+        info_spans.push(Span::styled(" │ ", sep_style));
         info_spans.push(Span::styled(
-            format!(" ({app_id})"),
-            Style::default().fg(Theme::TEXT_MUTED),
+            format!("{} {}", target.platform.icon(), target.display_label()),
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
-    info_spans.push(Span::styled(" │ ⚡ Variant: ", sep_style));
-    info_spans.push(Span::styled(
-        format!("{} ", app.project.active_variant),
-        Style::default()
-            .fg(Theme::WARNING)
-            .add_modifier(Modifier::BOLD),
-    ));
+    if app.project.active_platform().is_android() {
+        info_spans.push(Span::styled(
+            format!(" ({}) ", app.project.active_variant),
+            Style::default()
+                .fg(Theme::WARNING)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        info_spans.push(Span::raw(" "));
+    }
 
     let project_info_line = Line::from(info_spans);
 

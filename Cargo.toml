@@ -1,8 +1,8 @@
 [package]
 name = "overridepulse"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
-description = "Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)"
+description = "Ultralightweight TUI for Android, Kotlin Multiplatform (KMP) & Gradle development"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/OverrideLLC/overridepulse"

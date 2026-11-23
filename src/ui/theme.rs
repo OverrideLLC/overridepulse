@@ -10,6 +10,7 @@ impl Theme {
     pub const TEXT_PRIMARY: Color = Color::Rgb(240, 240, 240);
     pub const TEXT_MUTED: Color = Color::Rgb(130, 130, 130);
     pub const BG_DARK: Color = Color::Rgb(20, 24, 30);
+    pub const BG_CARD: Color = Color::Rgb(26, 31, 40);
     pub const ACTIVE_BORDER: Color = Color::Rgb(79, 195, 247);
     pub const INACTIVE_BORDER: Color = Color::Rgb(60, 65, 75);
 

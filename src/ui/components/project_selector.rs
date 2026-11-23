@@ -20,9 +20,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(if app.projects_discovering {
-            " Select Android Project (scanning…) ".to_string()
+            " Select Gradle / KMP Project (scanning…) ".to_string()
         } else {
-            format!(" Select Android Project ({}) ", app.nearby_projects.len())
+            format!(" Select Gradle / KMP Project ({}) ", app.nearby_projects.len())
         })
         .title_style(
             Style::default()

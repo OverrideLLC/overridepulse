@@ -15,7 +15,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Devices;
 
     let title = format!(
-        " Connected Devices ({}) │ [w] Wi-Fi ADB ",
+        " Devices ({}) │ [w] Wi-Fi ADB │ [d/Esc] Back ",
         app.devices.len()
     );
     let block = Block::default()
@@ -27,7 +27,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     if app.devices.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
-            "  No devices connected. Plug in a device or press [w] for Wi-Fi ADB.",
+            "  No devices · [w] Wi-Fi ADB",
             Style::default().fg(Theme::TEXT_MUTED),
         )]));
         let list = List::new(vec![empty_item]).block(block);
@@ -91,16 +91,6 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 Style::default().fg(Theme::TEXT_MUTED),
             ));
 
-            // Active badge
-            if is_selected {
-                spans.push(Span::styled(
-                    " [ACTIVE]",
-                    Style::default()
-                        .fg(Theme::SUCCESS)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-
             // Non-ready state badge if applicable
             if device.state != DeviceState::Device {
                 spans.push(Span::styled(
@@ -121,28 +111,28 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                     Theme::ERROR
                 };
                 spans.push(Span::styled(
-                    format!(" │ ⚡{battery}%"),
+                    format!(" · {battery}%"),
                     Style::default().fg(bat_color),
                 ));
             }
 
             // Android OS / API Level
             match (&device.android_version, device.api_level) {
-                (Some(ver), Some(api)) => {
+                (Some(ver), Some(_)) => {
                     spans.push(Span::styled(
-                        format!(" │ Android {ver} (API {api})"),
+                        format!(" · Android {ver}"),
                         Style::default().fg(Theme::TEXT_MUTED),
                     ));
                 }
                 (None, Some(api)) => {
                     spans.push(Span::styled(
-                        format!(" │ API {api}"),
+                        format!(" · API {api}"),
                         Style::default().fg(Theme::TEXT_MUTED),
                     ));
                 }
                 (Some(ver), None) => {
                     spans.push(Span::styled(
-                        format!(" │ Android {ver}"),
+                        format!(" · Android {ver}"),
                         Style::default().fg(Theme::TEXT_MUTED),
                     ));
                 }

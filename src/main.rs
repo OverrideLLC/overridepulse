@@ -99,12 +99,16 @@ async fn main() -> Result<()> {
     // the UI thread. The first frame paints immediately.
     let mut app = AppState::pending(root_path.clone());
     app.target_device_serial = cli.device.clone();
+    if let Ok(area) = terminal.size() {
+        app.terminal_width = area.width;
+    }
 
-    app.append_console_line("⚡ OverridePulse initialized".to_string());
-    app.append_console_line(format!("📋 {}", sdk_config.status_summary()));
-    app.append_console_line(format!("📂 Opening {}", root_path.display()));
+    app.append_console_line(format!("⚡ OverridePulse · {}", root_path.display()));
+    if !sdk_config.is_adb_available() {
+        app.append_console_line("ℹ adb not found in PATH (host KMP targets still available)".to_string());
+    }
     if let Some(ref target) = cli.device {
-        app.append_console_line(format!("🎯 Target device specified: {target}"));
+        app.append_console_line(format!("🎯 Target device: {target}"));
     }
 
     let mut event_handler = EventHandler::new(Duration::from_millis(cli.tick_rate));
@@ -194,6 +198,16 @@ async fn main() -> Result<()> {
                     if let Some(id) = &app.project.application_id {
                         app.append_console_line(format!("📦 applicationId: {id}"));
                     }
+                    if app.project.is_kmp && !app.project.targets.is_empty() {
+                        let summary = app
+                            .project
+                            .targets
+                            .iter()
+                            .map(|t| t.display_label())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        app.append_console_line(format!("🧩 KMP targets: {summary}"));
+                    }
                     if !valid {
                         app.project_selector_active = true;
                         app.projects_discovering = true;
@@ -244,8 +258,8 @@ async fn main() -> Result<()> {
                         sync_logcat_stream(&app, &mut logcat_stream, &adb_path, &sender);
                     }
                 }
-                AppEvent::Resize(_, _) => {
-                    // Redrawn automatically on next draw
+                AppEvent::Resize(w, _) => {
+                    app.terminal_width = w;
                 }
                 AppEvent::Mouse(_) => {}
             }
@@ -267,15 +281,18 @@ fn trigger_quick_action(
     adb_path: &Path,
     sender: &UnboundedSender<AppEvent>,
 ) {
-    let serial = match app.selected_device() {
-        Some(dev) => dev.serial.clone(),
-        None => {
-            if action == QuickAction::StopGradleDaemons {
-                "local".to_string()
-            } else {
+    let active_target = app.project.active_target().cloned();
+    let title = action.title_for(active_target.as_ref());
+
+    let serial = if !action.requires_adb_device() {
+        "local".to_string()
+    } else {
+        match app.selected_device() {
+            Some(dev) => dev.serial.clone(),
+            None => {
                 let msg = format!(
                     "⚠ Cannot execute '{}': No Android device connected or selected.",
-                    action.title()
+                    title
                 );
                 app.append_console_line(msg);
                 app.finish_task(false, "No device connected");
@@ -284,7 +301,6 @@ fn trigger_quick_action(
         }
     };
 
-    let title = action.title().to_string();
     app.start_task(title.clone());
 
     let shortcut_str = action
@@ -292,8 +308,19 @@ fn trigger_quick_action(
         .map(|c| c.to_string())
         .unwrap_or_else(|| "Enter".to_string());
 
-    if action == QuickAction::StopGradleDaemons {
-        app.append_console_line(format!("> [{shortcut_str}] Starting {title}..."));
+    if !action.requires_adb_device() {
+        if let Some(ref target) = active_target {
+            if action != QuickAction::StopGradleDaemons && action != QuickAction::GradleBuildAll {
+                app.append_console_line(format!(
+                    "> [{shortcut_str}] Starting {title} ({})...",
+                    target.display_label()
+                ));
+            } else {
+                app.append_console_line(format!("> [{shortcut_str}] Starting {title}..."));
+            }
+        } else {
+            app.append_console_line(format!("> [{shortcut_str}] Starting {title}..."));
+        }
     } else {
         app.append_console_line(format!(
             "> [{shortcut_str}] Starting {title} on device '{serial}'..."
@@ -324,6 +351,9 @@ fn trigger_quick_action(
     }
     if let Some(ref module) = app.project.active_module {
         ctx = ctx.with_module(module);
+    }
+    if let Some(target) = active_target {
+        ctx = ctx.with_target(target);
     }
 
     runner.execute_action(action, ctx, sender.clone());
@@ -636,6 +666,11 @@ fn handle_key_event(
         return;
     }
 
+    if key.code == KeyCode::Esc && app.devices_view_active {
+        app.toggle_devices_view();
+        return;
+    }
+
     match key.code {
         // App quit
         KeyCode::Char('q') => {
@@ -660,6 +695,15 @@ fn handle_key_event(
         KeyCode::Char('v') => {
             app.next_variant();
             sync_logcat_stream(app, logcat_stream, adb_path, sender);
+        }
+        // KMP target cycle
+        KeyCode::Char('t') => {
+            app.next_target();
+            sync_logcat_stream(app, logcat_stream, adb_path, sender);
+        }
+        // Toggle separate Devices & ADB Controls view
+        KeyCode::Char('d') => {
+            app.toggle_devices_view();
         }
         // Project selector modal
         KeyCode::Char('p') => {
@@ -701,6 +745,12 @@ fn handle_key_event(
             copy_focused_console(app, &key);
         }
         // Navigation / Scroll
+        KeyCode::Left => {
+            app.move_left();
+        }
+        KeyCode::Right => {
+            app.move_right();
+        }
         KeyCode::Up => {
             let prev_serial = app.selected_device().map(|d| d.serial.clone());
             app.scroll_up();
@@ -754,9 +804,11 @@ fn handle_key_event(
             }
             _ => {}
         },
-        // Quick Action Shortcuts: [b], [r], [k], [u], [g]
+        // Quick Action Shortcuts: [b], [r], [k], [u], [g] (contextual to active target)
         KeyCode::Char(c) => {
-            if let Some(action) = QuickAction::from_char(c) {
+            if let Some(action) =
+                QuickAction::from_char_for_target(c, app.project.active_target())
+            {
                 trigger_quick_action(app, runner, logcat_stream, action, adb_path, sender);
             }
         }
@@ -843,25 +895,42 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let adb_path = PathBuf::from("adb");
 
-        assert_eq!(app.current_panel, Panel::Devices);
-
-        // Tab to Next Panel -> DeviceControls
-        let key_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
-        handle_key_event(&mut app, &mut runner, &mut logcat, key_tab, &adb_path, &tx);
-        assert_eq!(app.current_panel, Panel::DeviceControls);
-
-        // Tab to Next Panel -> Actions
-        handle_key_event(&mut app, &mut runner, &mut logcat, key_tab, &adb_path, &tx);
         assert_eq!(app.current_panel, Panel::Actions);
+        let expected_cols = app.actions_grid_cols();
 
-        // Up / Down navigation in Actions panel
+        // Left / Right and Up / Down navigation in Actions grid
+        let key_right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_right, &adb_path, &tx);
+        assert_eq!(app.selected_action_index, 1);
+
+        let key_left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_left, &adb_path, &tx);
+        assert_eq!(app.selected_action_index, 0);
+
         let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_down, &adb_path, &tx);
-        assert_eq!(app.selected_action_index, 1);
+        assert_eq!(app.selected_action_index, expected_cols);
 
         let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_up, &adb_path, &tx);
         assert_eq!(app.selected_action_index, 0);
+
+        // Open separate Devices & ADB Controls view with 'd'
+        let key_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_d, &adb_path, &tx);
+        assert!(app.devices_view_active);
+        assert_eq!(app.current_panel, Panel::Devices);
+
+        // Tab to Next Panel inside Devices view -> DeviceControls
+        let key_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_tab, &adb_path, &tx);
+        assert_eq!(app.current_panel, Panel::DeviceControls);
+
+        // Esc closes Devices view and returns to Actions
+        let key_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_esc, &adb_path, &tx);
+        assert!(!app.devices_view_active);
+        assert_eq!(app.current_panel, Panel::Actions);
 
         // Toggle help modal
         let key_help = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
@@ -966,5 +1035,55 @@ mod tests {
         handle_key_event(&mut app, &mut runner, &mut logcat, key_m, &adb_path, &tx);
         // Presets ensure at least one pane is always active
         assert!(app.show_simplified_pane || app.show_build_pane || app.show_logcat_pane);
+    }
+
+    #[tokio::test]
+    async fn test_kmp_target_actions_run_without_adb_device() {
+        use overridepulse::android::{KmpTarget, TargetPlatform};
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.project.is_kmp = true;
+        app.project.targets = vec![
+            KmpTarget::android(":composeApp", false),
+            KmpTarget {
+                platform: TargetPlatform::WasmJs,
+                module: ":composeApp".to_string(),
+                gradle_name: "wasmJs".to_string(),
+                is_kmp_target: true,
+                has_compose_desktop: false,
+                has_application_plugin: false,
+                has_browser: true,
+                has_nodejs: false,
+                is_library_only: false,
+            },
+        ];
+        app.sync_actions_for_active_target();
+
+        let mut runner = ProcessRunner::new();
+        let mut logcat = LogcatStream::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let adb_path = PathBuf::from("adb");
+
+        // Switch from Android to WasmJS using 't'
+        let key_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_t, &adb_path, &tx);
+        assert_eq!(
+            app.project.active_target().map(|t| t.platform),
+            Some(TargetPlatform::WasmJs)
+        );
+
+        // Press 'b' with zero ADB devices connected -> runs host KMP compile task
+        let key_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_b, &adb_path, &tx);
+        assert!(app.process_state.is_running);
+        assert_eq!(
+            app.process_state.task_description.as_deref(),
+            Some("Compile WasmJS")
+        );
+
+        let key_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_esc, &adb_path, &tx);
+        while rx.try_recv().is_ok() {}
     }
 }

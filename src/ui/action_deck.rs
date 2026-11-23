@@ -1,78 +1,74 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem},
+    style::Style,
+    widgets::{Block, BorderType, Borders},
     Frame,
 };
 
-use crate::app::{AppState, Panel};
+use crate::android::QuickAction;
+use crate::app::{grid_cols_for_width, AppState, Panel};
+use crate::ui::grid::{render_card_grid, GridCardItem};
 use crate::ui::theme::Theme;
 
-/// Renders the `[ App & Gradle Actions ]` deck panel with rounded borders.
-/// Displays single-letter shortcuts only for frequent repetitive actions:
-/// `[b]`, `[r]`, `[k]`, `[u]`, and `[g]`.
-/// Menu/utility actions (`Clear App Data`, `Build AAB & Deploy`, `Launch Scrcpy`)
-/// are presented cleanly without a letter badge.
+fn concise_action_title(action: QuickAction, app: &AppState) -> String {
+    let target = app.project.active_target();
+    match action {
+        QuickAction::BuildAndInstallDebug => "Build & Install".to_string(),
+        QuickAction::BuildAabAndDeploy => "Build AAB".to_string(),
+        QuickAction::ClearAppData => "Clear App Data".to_string(),
+        QuickAction::ForceStopApp => "Force Stop".to_string(),
+        QuickAction::RelaunchActivity => "Relaunch App".to_string(),
+        QuickAction::UninstallApp => "Uninstall App".to_string(),
+        QuickAction::LaunchScrcpy => "Scrcpy Mirror".to_string(),
+        QuickAction::StopGradleDaemons => "Stop Gradle".to_string(),
+        _ => action.title_for(target),
+    }
+}
+
+/// Renders the Actions panel as a responsive card grid.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Actions;
+    let active_target = app.project.active_target();
+
+    let panel_title = match active_target {
+        Some(target)
+            if app.project.is_kmp
+                || !target.platform.is_android()
+                || app.project.targets.len() > 1 =>
+        {
+            format!(" Actions · {} ", target.display_label())
+        }
+        _ => " Actions ".to_string(),
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" App & Gradle Actions ")
+        .title(panel_title)
         .title_style(Theme::title_style(is_focused))
         .border_style(Theme::border_style(is_focused))
         .style(Style::default().bg(Theme::BG_DARK));
 
-    let items: Vec<ListItem> = app
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let items: Vec<GridCardItem> = app
         .actions
         .iter()
-        .enumerate()
-        .map(|(idx, action)| {
-            let is_selected = idx == app.selected_action_index;
-            let cursor = if is_selected && is_focused {
-                "▶ "
-            } else {
-                "  "
-            };
-
-            let title = action.title();
-
-            let mut spans = Vec::new();
-            spans.push(Span::styled(cursor, Style::default().fg(Theme::ACCENT)));
-
-            if let Some(sc) = action.shortcut() {
-                spans.push(Span::styled(
-                    format!("[{sc}] "),
-                    Style::default()
-                        .fg(Theme::WARNING)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                spans.push(Span::styled("• ", Style::default().fg(Theme::TEXT_MUTED)));
-            }
-
-            spans.push(Span::styled(
-                title,
-                if is_selected {
-                    Style::default()
-                        .fg(Theme::ACCENT)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Theme::TEXT_PRIMARY)
-                },
-            ));
-
-            let item = ListItem::new(Line::from(spans));
-            if is_selected && is_focused {
-                item.style(Theme::selected_style())
-            } else {
-                item
-            }
+        .map(|action| GridCardItem {
+            badge: action.shortcut().map(|c| format!("[{c}]")),
+            title: concise_action_title(*action, app),
+            subtitle: None,
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, area);
+    let cols = grid_cols_for_width(inner.width, items.len(), 4);
+    render_card_grid(
+        frame,
+        inner,
+        &items,
+        app.selected_action_index,
+        is_focused,
+        cols,
+    );
 }

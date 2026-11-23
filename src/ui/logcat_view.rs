@@ -8,42 +8,34 @@ use ratatui::{
 
 use crate::android::{LogEntry, LogLevel};
 use crate::app::{AppState, Panel};
-use crate::ui::simplified_view::console_parity_bar;
 use crate::ui::theme::Theme;
 
 /// Renders the `[ Live Logcat ]` stream viewer with rounded borders,
-/// PRD-defined severity color coding, application filtering, search highlights, and parity indicator.
+/// severity color coding, application filtering, and search highlights.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let is_focused = app.current_panel == Panel::Logcat || app.current_panel == Panel::Console;
 
     let app_filter_tag = if app.logcat_filter_by_app {
-        if let Some(app_id) = &app.project.application_id {
-            format!(" [App: {app_id} (ON)]")
-        } else {
-            " [App: ON]".to_string()
-        }
+        " [App]"
     } else {
-        " [App: ALL]".to_string()
+        " [All]"
     };
 
     let search_tag = if !app.search_query.is_empty() {
-        format!(" [Filter: \"{}\"]", app.search_query)
+        format!(" [/{}]", app.search_query)
     } else {
         String::new()
     };
 
     let follow_tag = if app.auto_scroll_logcat {
-        " [Follow: ON]"
+        ""
     } else {
-        " [Follow: OFF]"
+        " [Paused]"
     };
-    let copy_tag = " [y] Copy";
 
-    let parity = console_parity_bar(app);
     let title = format!(
-        " [3] Logcat ({}){}{}{}{} │ {parity} ",
+        " [3] Logcat ({}){}{}{} │ [f] Scope [y] Copy ",
         app.logcat_entries.len(),
-        copy_tag,
         app_filter_tag,
         search_tag,
         follow_tag

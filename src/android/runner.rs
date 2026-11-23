@@ -8,9 +8,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::AbortHandle;
 
 use crate::android::device::DeviceAction;
+use crate::android::project::{KmpTarget, TargetPlatform};
 use crate::event::AppEvent;
 
-/// Represents predefined quick developer actions for Android development.
+/// Represents predefined quick developer actions for Android & KMP development.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QuickAction {
     /// `[b]`: Builds debug APK via `./gradlew assembleDebug` and installs via `adb install -r`.
@@ -29,24 +30,37 @@ pub enum QuickAction {
     LaunchScrcpy,
     /// `[g]`: Stops all running Gradle daemons (`./gradlew --stop`) and terminates active tasks.
     StopGradleDaemons,
+    /// `[b]` (KMP host targets): Compiles/builds the active JVM/WasmJS/JS target.
+    KmpCompileTarget,
+    /// `[r]` (KMP host targets): Runs or launches dev server for the active JVM/WasmJS/JS target.
+    KmpRunTarget,
+    /// Builds production distribution / OS package for the active KMP target.
+    KmpBundleDist,
+    /// Runs tests for the active KMP target.
+    KmpTestTarget,
+    /// Runs `./gradlew assemble` across the entire Gradle project.
+    GradleBuildAll,
 }
 
 impl QuickAction {
     /// Returns the single-character keyboard shortcut for this action, or `None` if menu-only.
     pub fn shortcut(&self) -> Option<char> {
         match self {
-            Self::BuildAndInstallDebug => Some('b'),
-            Self::RelaunchActivity => Some('r'),
+            Self::BuildAndInstallDebug | Self::KmpCompileTarget => Some('b'),
+            Self::RelaunchActivity | Self::KmpRunTarget => Some('r'),
             Self::ForceStopApp => Some('k'),
             Self::UninstallApp => Some('u'),
             Self::StopGradleDaemons => Some('g'),
-            Self::ClearAppData => None,
-            Self::BuildAabAndDeploy => None,
-            Self::LaunchScrcpy => None,
+            Self::ClearAppData
+            | Self::BuildAabAndDeploy
+            | Self::LaunchScrcpy
+            | Self::KmpBundleDist
+            | Self::KmpTestTarget
+            | Self::GradleBuildAll => None,
         }
     }
 
-    /// Resolves a keyboard shortcut into its corresponding `QuickAction`.
+    /// Resolves a keyboard shortcut into its corresponding Android `QuickAction`.
     pub fn from_char(c: char) -> Option<Self> {
         match c.to_ascii_lowercase() {
             'b' => Some(Self::BuildAndInstallDebug),
@@ -56,6 +70,40 @@ impl QuickAction {
             'g' => Some(Self::StopGradleDaemons),
             _ => None,
         }
+    }
+
+    /// Resolves a keyboard shortcut taking the active KMP/Android target into account.
+    pub fn from_char_for_target(c: char, target: Option<&KmpTarget>) -> Option<Self> {
+        match target.map(|t| t.platform) {
+            None | Some(TargetPlatform::Android) => Self::from_char(c),
+            Some(TargetPlatform::Jvm | TargetPlatform::WasmJs | TargetPlatform::Js) => {
+                match c.to_ascii_lowercase() {
+                    'b' => Some(Self::KmpCompileTarget),
+                    'r' => {
+                        if target.is_some_and(KmpTarget::is_runnable) {
+                            Some(Self::KmpRunTarget)
+                        } else {
+                            None
+                        }
+                    }
+                    'g' => Some(Self::StopGradleDaemons),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// Returns whether this action requires a connected ADB Android device.
+    pub fn requires_adb_device(&self) -> bool {
+        !matches!(
+            self,
+            Self::StopGradleDaemons
+                | Self::KmpCompileTarget
+                | Self::KmpRunTarget
+                | Self::KmpBundleDist
+                | Self::KmpTestTarget
+                | Self::GradleBuildAll
+        )
     }
 
     /// User-friendly title for UI headers and lists.
@@ -69,6 +117,57 @@ impl QuickAction {
             Self::UninstallApp => "Uninstall App",
             Self::LaunchScrcpy => "Launch Scrcpy Mirror",
             Self::StopGradleDaemons => "Stop All Gradle Daemons",
+            Self::KmpCompileTarget => "Compile KMP Target",
+            Self::KmpRunTarget => "Run / Dev Server",
+            Self::KmpBundleDist => "Build Distribution Bundle",
+            Self::KmpTestTarget => "Run Target Tests",
+            Self::GradleBuildAll => "Assemble All Targets",
+        }
+    }
+
+    /// Target-specific title for the Actions Deck.
+    pub fn title_for(&self, target: Option<&KmpTarget>) -> String {
+        let Some(t) = target else {
+            return self.title().to_string();
+        };
+        match (self, t.platform) {
+            (Self::KmpCompileTarget, TargetPlatform::Jvm) => "Compile JVM / Jar".to_string(),
+            (Self::KmpCompileTarget, TargetPlatform::WasmJs) => "Compile WasmJS".to_string(),
+            (Self::KmpCompileTarget, TargetPlatform::Js) => "Compile JS".to_string(),
+            (Self::KmpRunTarget, TargetPlatform::Jvm) => {
+                if t.has_compose_desktop {
+                    "Run Desktop App".to_string()
+                } else {
+                    "Run JVM App".to_string()
+                }
+            }
+            (Self::KmpRunTarget, TargetPlatform::WasmJs) => {
+                if t.has_nodejs && !t.has_browser {
+                    "Run WasmJS (Node)".to_string()
+                } else {
+                    "Run WasmJS Dev Server".to_string()
+                }
+            }
+            (Self::KmpRunTarget, TargetPlatform::Js) => {
+                if t.has_nodejs && !t.has_browser {
+                    "Run JS (Node)".to_string()
+                } else {
+                    "Run JS Dev Server".to_string()
+                }
+            }
+            (Self::KmpBundleDist, TargetPlatform::Jvm) => {
+                if t.has_compose_desktop {
+                    "Package Desktop Dist".to_string()
+                } else if t.has_application_plugin {
+                    "Install JVM Dist".to_string()
+                } else {
+                    "Build JVM Jar".to_string()
+                }
+            }
+            (Self::KmpBundleDist, TargetPlatform::WasmJs) => "Bundle WasmJS Dist".to_string(),
+            (Self::KmpBundleDist, TargetPlatform::Js) => "Bundle JS Dist".to_string(),
+            (Self::KmpTestTarget, plat) => format!("Run {} Tests", plat.label()),
+            _ => self.title().to_string(),
         }
     }
 
@@ -85,6 +184,13 @@ impl QuickAction {
             Self::StopGradleDaemons => {
                 "Stop all running Gradle daemons (./gradlew --stop) and terminate active Gradle tasks"
             }
+            Self::KmpCompileTarget => "Compile the selected Kotlin Multiplatform target via Gradle",
+            Self::KmpRunTarget => "Launch application or development server for the active target",
+            Self::KmpBundleDist => {
+                "Build production distribution or native OS package for the active target"
+            }
+            Self::KmpTestTarget => "Execute Gradle tests for the active target",
+            Self::GradleBuildAll => "Run ./gradlew assemble across all project modules and targets",
         }
     }
 
@@ -96,7 +202,7 @@ impl QuickAction {
         }
     }
 
-    /// Returns a slice containing all quick actions in recommended display order.
+    /// Returns a slice containing all Android quick actions in recommended display order.
     pub fn all() -> &'static [QuickAction] {
         &[
             Self::BuildAndInstallDebug,
@@ -109,9 +215,31 @@ impl QuickAction {
             Self::StopGradleDaemons,
         ]
     }
+
+    /// Returns the ordered list of actions tailored for the active target.
+    pub fn for_target(target: Option<&KmpTarget>) -> Vec<QuickAction> {
+        match target {
+            None
+            | Some(KmpTarget {
+                platform: TargetPlatform::Android,
+                ..
+            }) => Self::all().to_vec(),
+            Some(t) => {
+                let mut actions = vec![Self::KmpCompileTarget];
+                if t.is_runnable() {
+                    actions.push(Self::KmpRunTarget);
+                    actions.push(Self::KmpBundleDist);
+                }
+                actions.push(Self::KmpTestTarget);
+                actions.push(Self::GradleBuildAll);
+                actions.push(Self::StopGradleDaemons);
+                actions
+            }
+        }
+    }
 }
 
-/// Execution context for running quick actions on an Android project and device.
+/// Execution context for running quick actions on an Android or KMP project.
 #[derive(Debug, Clone)]
 pub struct ActionContext {
     pub project_root: PathBuf,
@@ -121,6 +249,7 @@ pub struct ActionContext {
     pub variant: String,
     pub adb_path: PathBuf,
     pub module: Option<String>,
+    pub target: Option<KmpTarget>,
 }
 
 impl ActionContext {
@@ -133,6 +262,7 @@ impl ActionContext {
             variant: "debug".to_string(),
             adb_path: PathBuf::from("adb"),
             module: None,
+            target: None,
         }
     }
 
@@ -158,6 +288,11 @@ impl ActionContext {
 
     pub fn with_module(mut self, module: impl Into<String>) -> Self {
         self.module = Some(module.into());
+        self
+    }
+
+    pub fn with_target(mut self, target: KmpTarget) -> Self {
+        self.target = Some(target);
         self
     }
 
@@ -429,6 +564,10 @@ pub async fn run_streaming_cmd(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
 
     let mut child = cmd.spawn()?;
     let stdout = child.stdout.take();
@@ -467,6 +606,15 @@ pub async fn run_streaming_cmd(
                 }
             }
             _ = rx => {
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    let pgid = format!("-{pid}");
+                    let _ = std::process::Command::new("kill")
+                        .args(["-TERM", &pgid])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
                 let _ = child.kill().await;
                 let _ = sender.send(AppEvent::ProcessOutput(format!("{description} cancelled by user.")));
                 false
@@ -604,6 +752,13 @@ impl ProcessRunner {
                 }
                 QuickAction::StopGradleDaemons => {
                     execute_stop_gradle_daemons(&ctx, &sender, &mut cancel_opt).await;
+                }
+                QuickAction::KmpCompileTarget
+                | QuickAction::KmpRunTarget
+                | QuickAction::KmpBundleDist
+                | QuickAction::KmpTestTarget
+                | QuickAction::GradleBuildAll => {
+                    execute_kmp_gradle_task(action, &ctx, &sender, &mut cancel_opt).await;
                 }
             }
         });
@@ -1800,6 +1955,170 @@ async fn execute_stop_gradle_daemons(
     }
 }
 
+fn prefix_gradle_module(module: &str, task: &str) -> String {
+    let trimmed = module.trim();
+    if trimmed.is_empty() || trimmed == ":" {
+        task.to_string()
+    } else if trimmed.starts_with(':') {
+        format!("{trimmed}:{task}")
+    } else {
+        format!(":{trimmed}:{task}")
+    }
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+/// Resolves the exact Gradle task name for a KMP / host `QuickAction` and `KmpTarget`.
+pub fn resolve_kmp_gradle_task(action: QuickAction, target: &KmpTarget) -> Option<String> {
+    if action == QuickAction::GradleBuildAll {
+        return Some("assemble".to_string());
+    }
+
+    let raw = target.gradle_name.as_str();
+    let cap = capitalize_first(raw);
+
+    let task = match (target.platform, action) {
+        (TargetPlatform::Android, _) => return None,
+
+        (TargetPlatform::Jvm, QuickAction::KmpCompileTarget) => {
+            if target.is_kmp_target {
+                format!("{raw}Jar")
+            } else {
+                "jar".to_string()
+            }
+        }
+        (TargetPlatform::Jvm, QuickAction::KmpRunTarget) => {
+            if target.has_compose_desktop || target.has_application_plugin {
+                "run".to_string()
+            } else {
+                format!("{raw}Run")
+            }
+        }
+        (TargetPlatform::Jvm, QuickAction::KmpBundleDist) => {
+            if target.has_compose_desktop {
+                "packageDistributionForCurrentOS".to_string()
+            } else if target.has_application_plugin {
+                "installDist".to_string()
+            } else if target.is_kmp_target {
+                format!("{raw}Jar")
+            } else {
+                "jar".to_string()
+            }
+        }
+        (TargetPlatform::Jvm, QuickAction::KmpTestTarget) => {
+            if target.is_kmp_target {
+                format!("{raw}Test")
+            } else {
+                "test".to_string()
+            }
+        }
+
+        (TargetPlatform::WasmJs | TargetPlatform::Js, QuickAction::KmpCompileTarget) => {
+            format!("compileKotlin{cap}")
+        }
+        (TargetPlatform::WasmJs | TargetPlatform::Js, QuickAction::KmpRunTarget) => {
+            if target.has_nodejs && !target.has_browser {
+                format!("{raw}NodeDevelopmentRun")
+            } else {
+                format!("{raw}BrowserDevelopmentRun")
+            }
+        }
+        (TargetPlatform::WasmJs | TargetPlatform::Js, QuickAction::KmpBundleDist) => {
+            if target.has_nodejs && !target.has_browser {
+                format!("{raw}NodeProductionLibraryDistribution")
+            } else {
+                format!("{raw}BrowserDistribution")
+            }
+        }
+        (TargetPlatform::WasmJs | TargetPlatform::Js, QuickAction::KmpTestTarget) => {
+            format!("{raw}Test")
+        }
+
+        _ => return None,
+    };
+
+    Some(prefix_gradle_module(&target.module, &task))
+}
+
+async fn execute_kmp_gradle_task(
+    action: QuickAction,
+    ctx: &ActionContext,
+    sender: &UnboundedSender<AppEvent>,
+    cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+) {
+    let task = if action == QuickAction::GradleBuildAll {
+        "assemble".to_string()
+    } else if let Some(ref target) = ctx.target {
+        match resolve_kmp_gradle_task(action, target) {
+            Some(t) => t,
+            None => {
+                let _ = sender.send(AppEvent::ProcessOutput(format!(
+                    "Action '{}' is not supported for target '{}'.",
+                    action.title(),
+                    target.display_label()
+                )));
+                let _ = sender.send(AppEvent::ProcessFinished(
+                    false,
+                    "Unsupported target action".to_string(),
+                ));
+                return;
+            }
+        }
+    } else {
+        let _ = sender.send(AppEvent::ProcessOutput(
+            "Error: No active KMP target selected.".to_string(),
+        ));
+        let _ = sender.send(AppEvent::ProcessFinished(
+            false,
+            "No KMP target selected".to_string(),
+        ));
+        return;
+    };
+
+    let gradlew = ctx.gradle_executable();
+    let _ = sender.send(AppEvent::ProcessOutput(format!(
+        "Executing Gradle task: {} {}",
+        gradlew.display(),
+        task
+    )));
+
+    let mut gradle_cmd = Command::new(&gradlew);
+    gradle_cmd.arg(&task);
+    gradle_cmd.current_dir(&ctx.project_root);
+
+    let desc = format!("Gradle {task}");
+    match run_streaming_cmd(gradle_cmd, &desc, sender, cancel_rx).await {
+        Ok(true) => {
+            let _ = sender.send(AppEvent::ProcessFinished(
+                true,
+                format!("{task} completed"),
+            ));
+        }
+        Ok(false) => {
+            let _ = sender.send(AppEvent::ProcessFinished(
+                false,
+                format!("{task} failed or cancelled"),
+            ));
+        }
+        Err(e) => {
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Failed to run Gradle ({}): {e}",
+                gradlew.display()
+            )));
+            let _ = sender.send(AppEvent::ProcessFinished(
+                false,
+                format!("Gradle invocation error: {e}"),
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2039,5 +2358,151 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_resolve_kmp_gradle_task() {
+        let compose_desktop = KmpTarget {
+            platform: TargetPlatform::Jvm,
+            module: ":composeApp".to_string(),
+            gradle_name: "desktop".to_string(),
+            is_kmp_target: true,
+            has_compose_desktop: true,
+            has_application_plugin: false,
+            has_browser: false,
+            has_nodejs: false,
+            is_library_only: false,
+        };
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpCompileTarget, &compose_desktop).as_deref(),
+            Some(":composeApp:desktopJar")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpRunTarget, &compose_desktop).as_deref(),
+            Some(":composeApp:run")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpBundleDist, &compose_desktop).as_deref(),
+            Some(":composeApp:packageDistributionForCurrentOS")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpTestTarget, &compose_desktop).as_deref(),
+            Some(":composeApp:desktopTest")
+        );
+
+        let standalone_jvm = KmpTarget {
+            platform: TargetPlatform::Jvm,
+            module: ":server".to_string(),
+            gradle_name: "jvm".to_string(),
+            is_kmp_target: false,
+            has_compose_desktop: false,
+            has_application_plugin: true,
+            has_browser: false,
+            has_nodejs: false,
+            is_library_only: false,
+        };
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpCompileTarget, &standalone_jvm).as_deref(),
+            Some(":server:jar")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpRunTarget, &standalone_jvm).as_deref(),
+            Some(":server:run")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpBundleDist, &standalone_jvm).as_deref(),
+            Some(":server:installDist")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpTestTarget, &standalone_jvm).as_deref(),
+            Some(":server:test")
+        );
+
+        let wasm_browser = KmpTarget {
+            platform: TargetPlatform::WasmJs,
+            module: ":composeApp".to_string(),
+            gradle_name: "wasmJs".to_string(),
+            is_kmp_target: true,
+            has_compose_desktop: false,
+            has_application_plugin: false,
+            has_browser: true,
+            has_nodejs: false,
+            is_library_only: false,
+        };
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpCompileTarget, &wasm_browser).as_deref(),
+            Some(":composeApp:compileKotlinWasmJs")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpRunTarget, &wasm_browser).as_deref(),
+            Some(":composeApp:wasmJsBrowserDevelopmentRun")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpBundleDist, &wasm_browser).as_deref(),
+            Some(":composeApp:wasmJsBrowserDistribution")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpTestTarget, &wasm_browser).as_deref(),
+            Some(":composeApp:wasmJsTest")
+        );
+
+        let js_node = KmpTarget {
+            platform: TargetPlatform::Js,
+            module: ":".to_string(),
+            gradle_name: "js".to_string(),
+            is_kmp_target: true,
+            has_compose_desktop: false,
+            has_application_plugin: false,
+            has_browser: false,
+            has_nodejs: true,
+            is_library_only: false,
+        };
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::KmpRunTarget, &js_node).as_deref(),
+            Some("jsNodeDevelopmentRun")
+        );
+        assert_eq!(
+            resolve_kmp_gradle_task(QuickAction::GradleBuildAll, &js_node).as_deref(),
+            Some("assemble")
+        );
+    }
+
+    #[test]
+    fn test_kmp_quick_actions_for_target_and_adb_requirements() {
+        let wasm_target = KmpTarget {
+            platform: TargetPlatform::WasmJs,
+            module: ":composeApp".to_string(),
+            gradle_name: "wasmJs".to_string(),
+            is_kmp_target: true,
+            has_compose_desktop: false,
+            has_application_plugin: false,
+            has_browser: true,
+            has_nodejs: false,
+            is_library_only: false,
+        };
+
+        let actions = QuickAction::for_target(Some(&wasm_target));
+        assert!(actions.contains(&QuickAction::KmpCompileTarget));
+        assert!(actions.contains(&QuickAction::KmpRunTarget));
+        assert!(actions.contains(&QuickAction::KmpBundleDist));
+        assert!(!actions.contains(&QuickAction::BuildAndInstallDebug));
+
+        assert_eq!(
+            QuickAction::from_char_for_target('b', Some(&wasm_target)),
+            Some(QuickAction::KmpCompileTarget)
+        );
+        assert_eq!(
+            QuickAction::from_char_for_target('r', Some(&wasm_target)),
+            Some(QuickAction::KmpRunTarget)
+        );
+        assert_eq!(
+            QuickAction::from_char_for_target('k', Some(&wasm_target)),
+            None
+        );
+
+        assert!(!QuickAction::KmpCompileTarget.requires_adb_device());
+        assert!(!QuickAction::KmpRunTarget.requires_adb_device());
+        assert!(!QuickAction::StopGradleDaemons.requires_adb_device());
+        assert!(QuickAction::BuildAndInstallDebug.requires_adb_device());
     }
 }

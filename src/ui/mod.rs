@@ -2,6 +2,7 @@ pub mod action_deck;
 pub mod components;
 pub mod device_controls;
 pub mod device_panel;
+pub mod grid;
 pub mod logcat_view;
 pub mod simplified_view;
 pub mod terminal_log;
@@ -36,107 +37,97 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     let body_area = vertical_chunks[0];
     let footer_area = vertical_chunks[1];
 
-    // Split body vertically into:
-    // - Fila superior (42%): 3 compact panels (Devices, ADB Controls, Action Deck)
-    // - Fila inferior (58%): Multi-view parity console (Simplified, Build Log, Logcat)
-    let body_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(42), // Fila superior
-            Constraint::Percentage(58), // Fila inferior
-        ])
-        .split(body_area);
+    if app.devices_view_active {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(body_area);
+        device_panel::render(frame, app, cols[0]);
+        device_controls::render(frame, app, cols[1]);
+    } else {
+        // Main workspace: Actions grid (40%) + Console (60%)
+        let body_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Percentage(60),
+            ])
+            .split(body_area);
 
-    let top_row_cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30), // Columna 1: Connected Devices + [w] Wi-Fi ADB
-            Constraint::Percentage(35), // Columna 2: Device Controls (ADB)
-            Constraint::Percentage(35), // Columna 3: App & Gradle Actions
-        ])
-        .split(body_rows[0]);
+        action_deck::render(frame, app, body_rows[0]);
+        let bottom_area = body_rows[1];
 
-    let devices_area = top_row_cols[0];
-    let device_controls_area = top_row_cols[1];
-    let actions_area = top_row_cols[2];
-    let bottom_area = body_rows[1];
+        let active_simplified = app.show_simplified_pane;
+        let active_build = app.show_build_pane;
+        let active_logcat = app.show_logcat_pane;
 
-    // 1. Render Fila superior del cuerpo (3 columnas compactas)
-    device_panel::render(frame, app, devices_area);
-    device_controls::render(frame, app, device_controls_area);
-    action_deck::render(frame, app, actions_area);
-
-    // 2. Render Fila inferior del cuerpo (Consola Multi-Vista con Paridad)
-    let active_simplified = app.show_simplified_pane;
-    let active_build = app.show_build_pane;
-    let active_logcat = app.show_logcat_pane;
-
-    match (active_simplified, active_build, active_logcat) {
-        // Triple view: All 3 active
-        (true, true, true) => {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(28), // Simplified Status
-                    Constraint::Percentage(36), // Build Output
-                    Constraint::Percentage(36), // Live Logcat
-                ])
-                .split(bottom_area);
-            simplified_view::render(frame, app, cols[0]);
-            terminal_log::render(frame, app, cols[1]);
-            logcat_view::render(frame, app, cols[2]);
-        }
-        // Dual view: Simplified + Logcat
-        (true, false, true) => {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(35), // Simplified Status
-                    Constraint::Percentage(65), // Live Logcat
-                ])
-                .split(bottom_area);
-            simplified_view::render(frame, app, cols[0]);
-            logcat_view::render(frame, app, cols[1]);
-        }
-        // Dual view: Simplified + Build
-        (true, true, false) => {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(35), // Simplified Status
-                    Constraint::Percentage(65), // Build Output
-                ])
-                .split(bottom_area);
-            simplified_view::render(frame, app, cols[0]);
-            terminal_log::render(frame, app, cols[1]);
-        }
-        // Dual view: Build + Logcat
-        (false, true, true) => {
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(50), // Build Output
-                    Constraint::Percentage(50), // Live Logcat
-                ])
-                .split(bottom_area);
-            terminal_log::render(frame, app, cols[0]);
-            logcat_view::render(frame, app, cols[1]);
-        }
-        // Single view: Simplified only
-        (true, false, false) => {
-            simplified_view::render(frame, app, bottom_area);
-        }
-        // Single view: Build only
-        (false, true, false) => {
-            terminal_log::render(frame, app, bottom_area);
-        }
-        // Single view: Logcat only
-        (false, false, true) => {
-            logcat_view::render(frame, app, bottom_area);
-        }
-        // Fallback: Default to Simplified
-        (false, false, false) => {
-            simplified_view::render(frame, app, bottom_area);
+        match (active_simplified, active_build, active_logcat) {
+            // Triple view: All 3 active
+            (true, true, true) => {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(28), // Simplified Status
+                        Constraint::Percentage(36), // Build Output
+                        Constraint::Percentage(36), // Live Logcat
+                    ])
+                    .split(bottom_area);
+                simplified_view::render(frame, app, cols[0]);
+                terminal_log::render(frame, app, cols[1]);
+                logcat_view::render(frame, app, cols[2]);
+            }
+            // Dual view: Simplified + Logcat
+            (true, false, true) => {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(35), // Simplified Status
+                        Constraint::Percentage(65), // Live Logcat
+                    ])
+                    .split(bottom_area);
+                simplified_view::render(frame, app, cols[0]);
+                logcat_view::render(frame, app, cols[1]);
+            }
+            // Dual view: Simplified + Build
+            (true, true, false) => {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(35), // Simplified Status
+                        Constraint::Percentage(65), // Build Output
+                    ])
+                    .split(bottom_area);
+                simplified_view::render(frame, app, cols[0]);
+                terminal_log::render(frame, app, cols[1]);
+            }
+            // Dual view: Build + Logcat
+            (false, true, true) => {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(50), // Build Output
+                        Constraint::Percentage(50), // Live Logcat
+                    ])
+                    .split(bottom_area);
+                terminal_log::render(frame, app, cols[0]);
+                logcat_view::render(frame, app, cols[1]);
+            }
+            // Single view: Simplified only
+            (true, false, false) => {
+                simplified_view::render(frame, app, bottom_area);
+            }
+            // Single view: Build only
+            (false, true, false) => {
+                terminal_log::render(frame, app, bottom_area);
+            }
+            // Single view: Logcat only
+            (false, false, true) => {
+                logcat_view::render(frame, app, bottom_area);
+            }
+            // Fallback: Default to Simplified
+            (false, false, false) => {
+                simplified_view::render(frame, app, bottom_area);
+            }
         }
     }
 
@@ -299,5 +290,48 @@ mod tests {
         app.search_active = true;
         app.search_query = "MainActivity".to_string();
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
+    }
+
+    #[test]
+    fn test_render_kmp_target_ui() {
+        use crate::android::{KmpTarget, TargetPlatform};
+
+        let backend = TestBackend::new(140, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.project.is_kmp = true;
+        app.project.targets = vec![
+            KmpTarget::android(":composeApp", false),
+            KmpTarget {
+                platform: TargetPlatform::WasmJs,
+                module: ":composeApp".to_string(),
+                gradle_name: "wasmJs".to_string(),
+                is_kmp_target: true,
+                has_compose_desktop: false,
+                has_application_plugin: false,
+                has_browser: true,
+                has_nodejs: false,
+                is_library_only: false,
+            },
+        ];
+        app.next_target();
+
+        let res = terminal.draw(|f| render(f, &app));
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_render_devices_view() {
+        let backend = TestBackend::new(120, 35);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.toggle_devices_view();
+
+        let res = terminal.draw(|f| render(f, &app));
+        assert!(res.is_ok());
     }
 }

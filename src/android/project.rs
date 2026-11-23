@@ -1,7 +1,106 @@
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
-/// Represents an Android project and its configuration extracted from Gradle and Manifest files.
+/// Supported build/run target platforms across Android and Kotlin Multiplatform (KMP).
+/// Apple/Native targets are intentionally deferred for a future phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TargetPlatform {
+    Android,
+    Jvm,
+    WasmJs,
+    Js,
+}
+
+impl TargetPlatform {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Android => "Android",
+            Self::Jvm => "JVM",
+            Self::WasmJs => "WasmJS",
+            Self::Js => "JS",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Android => "🤖",
+            Self::Jvm => "☕",
+            Self::WasmJs => "🕸",
+            Self::Js => "🟨",
+        }
+    }
+
+    pub fn is_android(&self) -> bool {
+        matches!(self, Self::Android)
+    }
+}
+
+impl std::fmt::Display for TargetPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+/// Represents a specific Gradle target discovered inside a project module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KmpTarget {
+    pub platform: TargetPlatform,
+    /// Gradle module path (e.g. `:composeApp`, `:webApp`, or `:` for root).
+    pub module: String,
+    /// Target identifier in Gradle DSL (e.g. `android`, `jvm`, `desktop`, `wasmJs`, `js`).
+    pub gradle_name: String,
+    pub is_kmp_target: bool,
+    pub has_compose_desktop: bool,
+    pub has_application_plugin: bool,
+    pub has_browser: bool,
+    pub has_nodejs: bool,
+    pub is_library_only: bool,
+}
+
+impl KmpTarget {
+    pub fn android(module: impl Into<String>, is_library_only: bool) -> Self {
+        Self {
+            platform: TargetPlatform::Android,
+            module: module.into(),
+            gradle_name: "android".to_string(),
+            is_kmp_target: false,
+            has_compose_desktop: false,
+            has_application_plugin: false,
+            has_browser: false,
+            has_nodejs: false,
+            is_library_only,
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        let default_name = match self.platform {
+            TargetPlatform::Android => "android",
+            TargetPlatform::Jvm => "jvm",
+            TargetPlatform::WasmJs => "wasmJs",
+            TargetPlatform::Js => "js",
+        };
+        let mod_part = if self.module == ":" {
+            "root".to_string()
+        } else {
+            self.module.clone()
+        };
+        if self.gradle_name != default_name {
+            format!("{} [{}] ({})", self.platform, self.gradle_name, mod_part)
+        } else {
+            format!("{} ({})", self.platform, mod_part)
+        }
+    }
+
+    pub fn is_runnable(&self) -> bool {
+        match self.platform {
+            TargetPlatform::Android => !self.is_library_only,
+            TargetPlatform::Jvm => self.has_compose_desktop || self.has_application_plugin || !self.is_library_only,
+            TargetPlatform::WasmJs | TargetPlatform::Js => self.has_browser || self.has_nodejs || !self.is_library_only,
+        }
+    }
+}
+
+/// Represents an Android / Kotlin Multiplatform Gradle project and its configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AndroidProject {
     pub name: String,
@@ -14,6 +113,9 @@ pub struct AndroidProject {
     pub modules: Vec<String>,
     pub active_module: Option<String>,
     pub is_valid_android_project: bool,
+    pub is_kmp: bool,
+    pub targets: Vec<KmpTarget>,
+    pub active_target_index: usize,
 }
 
 impl AndroidProject {
@@ -42,12 +144,27 @@ impl AndroidProject {
             modules: Vec::new(),
             active_module: None,
             is_valid_android_project: false,
+            is_kmp: false,
+            targets: Vec::new(),
+            active_target_index: 0,
         }
     }
 
-    /// Checks if the project is a valid detected Android project.
+    /// Checks if the project is a valid detected Gradle (Android or KMP) project.
     pub fn is_valid(&self) -> bool {
         self.is_valid_android_project
+    }
+
+    /// Returns the currently selected `KmpTarget`, if any.
+    pub fn active_target(&self) -> Option<&KmpTarget> {
+        self.targets.get(self.active_target_index)
+    }
+
+    /// Returns the active `TargetPlatform`, defaulting to `TargetPlatform::Android`.
+    pub fn active_platform(&self) -> TargetPlatform {
+        self.active_target()
+            .map(|t| t.platform)
+            .unwrap_or(TargetPlatform::Android)
     }
 
     /// Resolves the effective `applicationId` using in-memory config,
@@ -101,6 +218,8 @@ impl AndroidProject {
 
         // 2. Classify each module strictly into Tiers (Tier 1: Explicit App ID, Tier 2: App Plugin / Launcher, Tier 3: Library)
         let mut scanned_modules = Vec::new();
+        let mut all_targets = Vec::new();
+        let mut any_kmp_plugin = false;
 
         for m in &modules {
             let rel_path = m.trim_start_matches(':').replace(':', "/");
@@ -113,6 +232,11 @@ impl AndroidProject {
             let build_content = std::fs::read_to_string(mod_dir.join("build.gradle.kts"))
                 .or_else(|_| std::fs::read_to_string(mod_dir.join("build.gradle")))
                 .unwrap_or_default();
+
+            if has_kmp_plugin_applied(&build_content) {
+                any_kmp_plugin = true;
+            }
+            all_targets.extend(parse_kmp_targets_from_gradle(m, &build_content));
 
             let launcher_activity = parse_manifest_file(&mod_dir);
 
@@ -159,6 +283,18 @@ impl AndroidProject {
             });
         }
 
+        // Also inspect root build.gradle[.kts] for single-module KMP/JVM/JS projects
+        let root_build_content = std::fs::read_to_string(root.join("build.gradle.kts"))
+            .or_else(|_| std::fs::read_to_string(root.join("build.gradle")))
+            .unwrap_or_default();
+        if !root_build_content.is_empty() {
+            if has_kmp_plugin_applied(&root_build_content) {
+                any_kmp_plugin = true;
+            }
+            let root_targets = parse_kmp_targets_from_gradle(":", &root_build_content);
+            all_targets.extend(root_targets);
+        }
+
         // Prioritize canonical application names
         let rank_name = |name: &str| -> usize {
             let clean = name.trim_start_matches(':');
@@ -166,6 +302,10 @@ impl AndroidProject {
                 "composeApp" => 0,
                 "androidApp" => 1,
                 "app" => 2,
+                "desktopApp" => 3,
+                "webApp" => 4,
+                "server" => 5,
+                "" => 8,
                 _ => 10,
             }
         };
@@ -187,23 +327,23 @@ impl AndroidProject {
             .or_else(|| tier3.first())
             .copied();
 
-        let (active_module, mut app_id, mut namespace, variants, launcher_activity) = match selected
-        {
-            Some(sm) => (
-                Some(sm.module_name.clone()),
-                sm.app_id.clone(),
-                sm.namespace.clone(),
-                sm.variants.clone(),
-                sm.launcher_activity.clone(),
-            ),
-            None => (
-                None,
-                None,
-                None,
-                vec!["debug".to_string(), "release".to_string()],
-                None,
-            ),
-        };
+        let (mut active_module, mut app_id, mut namespace, variants, launcher_activity) =
+            match selected {
+                Some(sm) => (
+                    Some(sm.module_name.clone()),
+                    sm.app_id.clone(),
+                    sm.namespace.clone(),
+                    sm.variants.clone(),
+                    sm.launcher_activity.clone(),
+                ),
+                None => (
+                    None,
+                    None,
+                    None,
+                    vec!["debug".to_string(), "release".to_string()],
+                    None,
+                ),
+            };
 
         // If active module was selected and has namespace, but app_id wasn't set, assign if Tier 1 or 2
         if let Some(sm) = selected {
@@ -245,6 +385,49 @@ impl AndroidProject {
             .or_else(|| parse_manifest_file(&root))
             .or_else(|| find_launcher_activity_in_intermediates(&root));
 
+        // Sort & deduplicate discovered KMP/Android targets:
+        // runnable targets first, canonical module priority, then platform order.
+        all_targets.sort_by_key(|t| {
+            let platform_rank = match t.platform {
+                TargetPlatform::Android => 0usize,
+                TargetPlatform::Jvm => 1,
+                TargetPlatform::WasmJs => 2,
+                TargetPlatform::Js => 3,
+            };
+            (
+                usize::from(t.is_library_only),
+                rank_name(&t.module),
+                platform_rank,
+                t.gradle_name.clone(),
+            )
+        });
+        let mut deduped_targets: Vec<KmpTarget> = Vec::new();
+        for t in all_targets {
+            if !deduped_targets
+                .iter()
+                .any(|existing| existing.platform == t.platform && existing.module == t.module && existing.gradle_name == t.gradle_name)
+            {
+                deduped_targets.push(t);
+            }
+        }
+
+        let distinct_platforms = {
+            let mut plats = Vec::new();
+            for t in &deduped_targets {
+                if !plats.contains(&t.platform) {
+                    plats.push(t.platform);
+                }
+            }
+            plats.len()
+        };
+        let is_kmp = any_kmp_plugin || distinct_platforms > 1;
+
+        if active_module.is_none() {
+            if let Some(first_target) = deduped_targets.first() {
+                active_module = Some(first_target.module.clone());
+            }
+        }
+
         Self {
             name: project_name,
             root_path: root,
@@ -256,6 +439,9 @@ impl AndroidProject {
             modules,
             active_module,
             is_valid_android_project: true,
+            is_kmp,
+            targets: deduped_targets,
+            active_target_index: 0,
         }
     }
 
@@ -408,6 +594,226 @@ fn discover_modules_recursive(
             discover_modules_recursive(&path, root, depth + 1, max_depth, modules);
         }
     }
+}
+
+/// Strips Gradle `/* ... */` block comments and `// ...` line comments while preserving URLs.
+fn strip_gradle_comments(content: &str) -> String {
+    let block_re = Regex::new(r"(?s)/\*.*?\*/").unwrap();
+    let without_blocks = block_re.replace_all(content, "");
+    let line_re = Regex::new(r"(?m)(?:^\s*//.*$|\s+//.*$)").unwrap();
+    line_re.replace_all(&without_blocks, "").to_string()
+}
+
+fn content_without_apply_false(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.ends_with("apply false") && !trimmed.contains("apply(false)")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Returns true if the Gradle build script applies the Kotlin Multiplatform plugin.
+pub fn has_kmp_plugin_applied(content: &str) -> bool {
+    let cleaned = content_without_apply_false(&strip_gradle_comments(content));
+    cleaned.contains("org.jetbrains.kotlin.multiplatform")
+        || cleaned.contains("kotlin(\"multiplatform\")")
+        || cleaned.contains("kotlin('multiplatform')")
+        || cleaned.contains("kotlinMultiplatform")
+        || cleaned.contains("libs.plugins.kotlin.multiplatform")
+        || Regex::new(r"(?m)^\s*kotlin\s*\{").unwrap().is_match(&cleaned)
+}
+
+/// Extracts braced block content following a target declaration if present.
+fn extract_target_block(content: &str, match_end: usize) -> Option<&str> {
+    let rest = &content[match_end..];
+    let trimmed_start = rest.trim_start();
+    if !trimmed_start.starts_with('{') {
+        return None;
+    }
+    let brace_offset = rest.len() - trimmed_start.len();
+    let bytes = rest.as_bytes();
+    let mut depth = 0usize;
+    let mut start_idx = None;
+    for (idx, &b) in bytes.iter().enumerate().skip(brace_offset) {
+        match b {
+            b'{' => {
+                if start_idx.is_none() {
+                    start_idx = Some(idx + 1);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(s) = start_idx {
+                        return Some(&rest[s..idx]);
+                    }
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parses Android and Kotlin Multiplatform targets (`Android`, `JVM`, `WasmJS`, `JS`)
+/// from a module's `build.gradle` or `build.gradle.kts` content.
+pub fn parse_kmp_targets_from_gradle(module: &str, content: &str) -> Vec<KmpTarget> {
+    let stripped = strip_gradle_comments(content);
+    let active_plugins = content_without_apply_false(&stripped);
+    let mut targets = Vec::new();
+
+    let has_compose_desktop =
+        stripped.contains("compose.desktop") || stripped.contains("desktop.application");
+    let has_application_plugin = Regex::new(
+        r#"(?:id\s*\(\s*['"](?:org\.gradle\.)?application['"]\s*\)|(?m)^\s*application\s*\{|\bmainClass\b)"#,
+    )
+    .unwrap()
+    .is_match(&active_plugins);
+
+    // 1. Android target
+    let is_android_app = is_android_application_gradle(&active_plugins);
+    let is_android_lib = is_android_library_gradle(&active_plugins);
+    let has_kmp_android = Regex::new(r"(?:^|[\s;])(?:androidTarget|androidLibrary)\s*(?:\(|\{)")
+        .unwrap()
+        .is_match(&stripped);
+    if is_android_app || is_android_lib || has_kmp_android {
+        targets.push(KmpTarget::android(module, !is_android_app));
+    }
+
+    // 2. JVM / Desktop target
+    let kmp_jvm_re =
+        Regex::new(r#"(?m)(?:^|[\s;])jvm\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?\s*(?:\{|$)"#)
+            .unwrap();
+    let mut found_jvm = false;
+    for cap in kmp_jvm_re.captures_iter(&stripped) {
+        let gradle_name = cap
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "jvm".to_string());
+        if !targets
+            .iter()
+            .any(|t: &KmpTarget| t.platform == TargetPlatform::Jvm && t.gradle_name == gradle_name)
+        {
+            targets.push(KmpTarget {
+                platform: TargetPlatform::Jvm,
+                module: module.to_string(),
+                gradle_name,
+                is_kmp_target: true,
+                has_compose_desktop,
+                has_application_plugin,
+                has_browser: false,
+                has_nodejs: false,
+                is_library_only: !has_compose_desktop && !has_application_plugin && !stripped.contains("mainRun"),
+            });
+            found_jvm = true;
+        }
+    }
+
+    let has_kotlin_jvm_plugin = active_plugins.contains("kotlin(\"jvm\")")
+        || active_plugins.contains("kotlin('jvm')")
+        || active_plugins.contains("org.jetbrains.kotlin.jvm")
+        || active_plugins.contains("kotlinJvm")
+        || active_plugins.contains("libs.plugins.kotlin.jvm");
+    if !found_jvm && (has_kotlin_jvm_plugin || (has_application_plugin && !is_android_app && !is_android_lib && !has_kmp_plugin_applied(&stripped))) {
+        targets.push(KmpTarget {
+            platform: TargetPlatform::Jvm,
+            module: module.to_string(),
+            gradle_name: "jvm".to_string(),
+            is_kmp_target: false,
+            has_compose_desktop,
+            has_application_plugin,
+            has_browser: false,
+            has_nodejs: false,
+            is_library_only: !has_compose_desktop && !has_application_plugin,
+        });
+    }
+
+    // 3. WasmJS target
+    let wasm_re = Regex::new(
+        r#"(?m)(?:^|[\s;])wasmJs\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?(?:\s*\{|\s*$)"#,
+    )
+    .unwrap();
+    for cap in wasm_re.captures_iter(&stripped) {
+        let full = cap.get(0).unwrap();
+        let match_end = if full.as_str().ends_with('{') {
+            full.end() - 1
+        } else {
+            full.end()
+        };
+        let block = extract_target_block(&stripped, match_end).unwrap_or("");
+        let has_browser = block.contains("browser") || (block.is_empty() && stripped.contains("browser"));
+        let has_nodejs = block.contains("nodejs") || (block.is_empty() && stripped.contains("nodejs"));
+        let has_exec = block.contains("binaries.executable") || stripped.contains("binaries.executable");
+        let gradle_name = cap
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "wasmJs".to_string());
+        if !targets.iter().any(|t| {
+            t.platform == TargetPlatform::WasmJs && t.gradle_name == gradle_name
+        }) {
+            targets.push(KmpTarget {
+                platform: TargetPlatform::WasmJs,
+                module: module.to_string(),
+                gradle_name,
+                is_kmp_target: true,
+                has_compose_desktop: false,
+                has_application_plugin: false,
+                has_browser,
+                has_nodejs,
+                is_library_only: !has_browser && !has_nodejs && !has_exec,
+            });
+        }
+    }
+
+    // 4. JS target
+    let js_re = Regex::new(r#"(?m)(?:^|[\s;])js\s*(?:\(([^)]*)\))?\s*(?:\{|$)"#).unwrap();
+    let quoted_name_re = Regex::new(r#"['"]([a-zA-Z0-9_]+)['"]"#).unwrap();
+    for cap in js_re.captures_iter(&stripped) {
+        let full = cap.get(0).unwrap();
+        let args = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let has_braces = full.as_str().ends_with('{');
+        // Avoid false positives unless js(...) has args/parens or block braces
+        if cap.get(1).is_none() && !has_braces {
+            continue;
+        }
+        let match_end = if has_braces {
+            full.end() - 1
+        } else {
+            full.end()
+        };
+        let block = extract_target_block(&stripped, match_end).unwrap_or("");
+        let has_browser = block.contains("browser") || (block.is_empty() && stripped.contains("browser"));
+        let has_nodejs = block.contains("nodejs") || (block.is_empty() && stripped.contains("nodejs"));
+        let has_exec = block.contains("binaries.executable") || stripped.contains("binaries.executable");
+        let gradle_name = quoted_name_re
+            .captures(args)
+            .map(|c| c[1].to_string())
+            .unwrap_or_else(|| "js".to_string());
+
+        if !targets
+            .iter()
+            .any(|t| t.platform == TargetPlatform::Js && t.gradle_name == gradle_name)
+        {
+            targets.push(KmpTarget {
+                platform: TargetPlatform::Js,
+                module: module.to_string(),
+                gradle_name,
+                is_kmp_target: true,
+                has_compose_desktop: false,
+                has_application_plugin: false,
+                has_browser,
+                has_nodejs,
+                is_library_only: !has_browser && !has_nodejs && !has_exec,
+            });
+        }
+    }
+
+    targets
 }
 
 /// Returns true if the Gradle build script defines or applies an Android Application configuration.
@@ -1755,5 +2161,195 @@ android {{
         assert!(found.contains(&nested), "nested sibling should be listed");
 
         let _ = fs::remove_dir_all(&temp_base);
+    }
+
+    #[test]
+    fn test_parse_kmp_targets_compose_multiplatform() {
+        let gradle = r#"
+            plugins {
+                alias(libs.plugins.kotlinMultiplatform)
+                alias(libs.plugins.androidApplication)
+                alias(libs.plugins.composeMultiplatform)
+            }
+
+            kotlin {
+                androidTarget()
+                jvm("desktop") {
+                    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
+                }
+                @OptIn(ExperimentalWasmDsl::class)
+                wasmJs {
+                    browser()
+                    binaries.executable()
+                }
+                js(IR) {
+                    browser()
+                    nodejs()
+                    binaries.executable()
+                }
+                // wasmJs("ignored")
+                /* js { nodejs() } */
+            }
+
+            compose.desktop {
+                application {
+                    mainClass = "org.override.MainKt"
+                }
+            }
+        "#;
+
+        let targets = parse_kmp_targets_from_gradle(":composeApp", gradle);
+        assert_eq!(targets.len(), 4);
+
+        let android = targets
+            .iter()
+            .find(|t| t.platform == TargetPlatform::Android)
+            .unwrap();
+        assert!(!android.is_library_only);
+
+        let jvm = targets
+            .iter()
+            .find(|t| t.platform == TargetPlatform::Jvm)
+            .unwrap();
+        assert_eq!(jvm.gradle_name, "desktop");
+        assert!(jvm.has_compose_desktop);
+        assert!(jvm.is_kmp_target);
+
+        let wasm = targets
+            .iter()
+            .find(|t| t.platform == TargetPlatform::WasmJs)
+            .unwrap();
+        assert_eq!(wasm.gradle_name, "wasmJs");
+        assert!(wasm.has_browser);
+        assert!(!wasm.has_nodejs);
+        assert!(!wasm.is_library_only);
+
+        let js = targets
+            .iter()
+            .find(|t| t.platform == TargetPlatform::Js)
+            .unwrap();
+        assert_eq!(js.gradle_name, "js");
+        assert!(js.has_browser);
+        assert!(js.has_nodejs);
+        assert!(!js.is_library_only);
+    }
+
+    #[test]
+    fn test_detect_multimodule_kmp_project() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("overridepulse_kmp_proj_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        File::create(temp_dir.join("gradlew")).unwrap();
+        fs::write(
+            temp_dir.join("settings.gradle.kts"),
+            r#"
+                rootProject.name = "PulseKmp"
+                include(":composeApp", ":shared", ":webApp")
+            "#,
+        )
+        .unwrap();
+
+        // Root build.gradle.kts uses apply false, so it should NOT generate phantom targets
+        fs::write(
+            temp_dir.join("build.gradle.kts"),
+            r#"
+                plugins {
+                    alias(libs.plugins.kotlinMultiplatform) apply false
+                    alias(libs.plugins.androidApplication) apply false
+                }
+            "#,
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp_dir.join("composeApp/src/androidMain")).unwrap();
+        fs::write(
+            temp_dir.join("composeApp/build.gradle.kts"),
+            r#"
+                plugins {
+                    alias(libs.plugins.kotlinMultiplatform)
+                    alias(libs.plugins.androidApplication)
+                }
+                kotlin {
+                    androidTarget()
+                    jvm("desktop")
+                    wasmJs {
+                        browser()
+                        binaries.executable()
+                    }
+                }
+                android {
+                    namespace = "org.override.kmp"
+                    defaultConfig {
+                        applicationId = "org.override.kmp"
+                    }
+                }
+                compose.desktop {
+                    application {
+                        mainClass = "org.override.kmp.MainKt"
+                    }
+                }
+            "#,
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp_dir.join("shared")).unwrap();
+        fs::write(
+            temp_dir.join("shared/build.gradle.kts"),
+            r#"
+                plugins {
+                    alias(libs.plugins.kotlinMultiplatform)
+                }
+                kotlin {
+                    jvm()
+                    wasmJs()
+                }
+            "#,
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp_dir.join("webApp")).unwrap();
+        fs::write(
+            temp_dir.join("webApp/build.gradle.kts"),
+            r#"
+                plugins {
+                    kotlin("multiplatform")
+                }
+                kotlin {
+                    js(IR) {
+                        browser()
+                        binaries.executable()
+                    }
+                }
+            "#,
+        )
+        .unwrap();
+
+        let project = AndroidProject::detect(&temp_dir);
+        assert!(project.is_valid());
+        assert!(project.is_kmp);
+        assert_eq!(project.name, "PulseKmp");
+        assert_eq!(project.active_module.as_deref(), Some(":composeApp"));
+        assert!(project
+            .targets
+            .iter()
+            .any(|t| t.platform == TargetPlatform::Android && t.module == ":composeApp"));
+        assert!(project
+            .targets
+            .iter()
+            .any(|t| t.platform == TargetPlatform::Jvm && t.module == ":composeApp"));
+        assert!(project
+            .targets
+            .iter()
+            .any(|t| t.platform == TargetPlatform::WasmJs && t.module == ":composeApp"));
+        assert!(project
+            .targets
+            .iter()
+            .any(|t| t.platform == TargetPlatform::Js && t.module == ":webApp"));
+        // Root build.gradle.kts with apply false should not produce ":" targets
+        assert!(!project.targets.iter().any(|t| t.module == ":"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
