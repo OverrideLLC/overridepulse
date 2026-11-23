@@ -1,12 +1,11 @@
 [package]
 name = "overridepulse"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Ultralightweight TUI for Android, Kotlin Multiplatform (KMP) & Gradle development"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/OverrideLLC/overridepulse"
-homepage = "https://github.com/OverrideLLC/overridepulse"
 documentation = "https://docs.rs/overridepulse"
 authors = ["Override LLC <christopher.override@gmail.com>", "ChristopherTwo <christopher.override@gmail.com>"]
 keywords = ["android", "adb", "gradle", "tui", "ratatui"]

@@ -134,13 +134,15 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     // 3. Render Footer (Shortcuts + Project & Variant status)
     components::footer::render(frame, app, footer_area);
 
-    // 4. Overlays (Priority: Project Selector > ADB Connect Modal > Help > Search)
-    if app.project_selector_active {
+    // 4. Overlays (Priority: Onboarding > Project Selector > ADB Connect Modal > Help > Search)
+    if app.onboarding_active {
+        components::onboarding::render(frame, app, size);
+    } else if app.project_selector_active {
         components::project_selector::render(frame, app, size);
     } else if app.adb_connect_modal_active {
         components::adb_connect_modal::render(frame, app, size);
     } else if app.help_active {
-        components::help::render(frame, size);
+        components::help::render(frame, size, app.palette());
     } else if app.search_active {
         components::search::render(frame, app, size);
     }
@@ -333,5 +335,20 @@ mod tests {
 
         let res = terminal.draw(|f| render(f, &app));
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_render_onboarding_steps() {
+        let backend = TestBackend::new(120, 35);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.open_onboarding();
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+        app.onboarding_step = 1;
+        app.next_theme();
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
     }
 }

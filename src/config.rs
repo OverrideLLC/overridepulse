@@ -1,6 +1,101 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::ui::theme::ThemePreset;
+
+/// Persistent user preferences stored under `~/.config/overridepulse/config`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UserConfig {
+    pub onboarding_completed: bool,
+    pub theme: ThemePreset,
+}
+
+impl UserConfig {
+    pub fn config_path() -> Option<PathBuf> {
+        if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
+            let trimmed = xdg.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed).join("overridepulse/config"));
+            }
+        }
+
+        #[cfg(windows)]
+        if let Ok(appdata) = env::var("APPDATA") {
+            let trimmed = appdata.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed).join("overridepulse").join("config"));
+            }
+        }
+
+        env::var("HOME")
+            .ok()
+            .filter(|h| !h.trim().is_empty())
+            .map(|home| PathBuf::from(home).join(".config/overridepulse/config"))
+    }
+
+    pub fn load() -> Self {
+        match Self::config_path() {
+            Some(path) => Self::load_from(&path),
+            None => Self::default(),
+        }
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(path) = Self::config_path() else {
+            return Ok(());
+        };
+        self.save_to(&path)
+    }
+
+    pub fn load_from(path: &Path) -> Self {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        Self::parse(&content)
+    }
+
+    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, self.serialize())
+    }
+
+    pub fn parse(content: &str) -> Self {
+        let mut cfg = Self::default();
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                let key = key.trim();
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                match key {
+                    "onboarding_completed" => {
+                        cfg.onboarding_completed = val.eq_ignore_ascii_case("true");
+                    }
+                    "theme" => {
+                        if let Some(preset) = ThemePreset::from_id(val) {
+                            cfg.theme = preset;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        cfg
+    }
+
+    pub fn serialize(&self) -> String {
+        format!(
+            "onboarding_completed = {}\ntheme = \"{}\"\n",
+            self.onboarding_completed,
+            self.theme.id()
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SdkConfig {
     pub sdk_root: Option<PathBuf>,
@@ -220,5 +315,28 @@ mod tests {
         let summary = config.status_summary();
         assert!(summary.contains("SDK:"));
         assert!(summary.contains("adb:"));
+    }
+
+    #[test]
+    fn test_user_config_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "overridepulse_cfg_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cfg_path = temp_dir.join("overridepulse/config");
+
+        let cfg = UserConfig {
+            onboarding_completed: true,
+            theme: ThemePreset::TokyoNight,
+        };
+        cfg.save_to(&cfg_path).unwrap();
+
+        let loaded = UserConfig::load_from(&cfg_path);
+        assert_eq!(loaded, cfg);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

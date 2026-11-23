@@ -1,12 +1,12 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
-use crate::ui::theme::Theme;
+use crate::ui::theme::ThemePalette;
 
 /// Single card entry rendered inside a responsive grid panel.
 pub struct GridCardItem {
@@ -23,6 +23,7 @@ pub fn render_card_grid(
     selected_index: usize,
     is_focused: bool,
     cols: usize,
+    theme: ThemePalette,
 ) {
     if area.width == 0 || area.height == 0 || items.is_empty() {
         return;
@@ -64,7 +65,7 @@ pub fn render_card_grid(
                 *cell_area
             };
 
-            render_single_card(frame, card_rect, item, is_selected, is_active_selected);
+            render_single_card(frame, card_rect, item, is_selected, is_active_selected, theme);
         }
     }
 }
@@ -75,10 +76,11 @@ fn render_single_card(
     item: &GridCardItem,
     is_selected: bool,
     is_active_selected: bool,
+    theme: ThemePalette,
 ) {
     let mut title_spans = Vec::new();
     if is_active_selected {
-        title_spans.push(Span::styled("▶ ", Style::default().fg(Theme::ACCENT)));
+        title_spans.push(Span::styled("▶ ", Style::default().fg(theme.accent)));
     } else {
         title_spans.push(Span::raw(" "));
     }
@@ -87,7 +89,7 @@ fn render_single_card(
         title_spans.push(Span::styled(
             format!("{badge} "),
             Style::default()
-                .fg(Theme::WARNING)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -96,20 +98,20 @@ fn render_single_card(
         item.title.as_str(),
         if is_selected {
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::TEXT_PRIMARY)
+            Style::default().fg(theme.text_primary)
         },
     ));
 
     if area.height >= 3 {
         let (border_color, bg_color) = if is_active_selected {
-            (Theme::ACCENT, Color::Rgb(38, 52, 74))
+            (theme.accent, theme.bg_selected)
         } else if is_selected {
-            (Theme::TEXT_MUTED, Color::Rgb(30, 38, 52))
+            (theme.text_muted, theme.bg_selected_inactive)
         } else {
-            (Theme::INACTIVE_BORDER, Theme::BG_CARD)
+            (theme.inactive_border, theme.bg_card)
         };
 
         let block = Block::default()
@@ -130,18 +132,18 @@ fn render_single_card(
             if let Some(ref sub) = item.subtitle {
                 lines.push(Line::from(Span::styled(
                     format!(" {sub}"),
-                    Style::default().fg(Theme::TEXT_MUTED),
+                    Style::default().fg(theme.text_muted),
                 )));
             }
         }
         frame.render_widget(Paragraph::new(lines), inner);
     } else {
         let bg = if is_active_selected {
-            Color::Rgb(40, 50, 70)
+            theme.bg_selected
         } else if is_selected {
-            Color::Rgb(30, 38, 52)
+            theme.bg_selected_inactive
         } else {
-            Theme::BG_CARD
+            theme.bg_card
         };
         let paragraph = Paragraph::new(Line::from(title_spans)).style(Style::default().bg(bg));
         frame.render_widget(paragraph, area);

@@ -8,10 +8,10 @@ use ratatui::{
 
 use crate::android::DeviceState;
 use crate::app::{AppState, Panel};
-use crate::ui::theme::Theme;
 
 /// Renders the `[ Connected Devices ]` panel with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let is_focused = app.current_panel == Panel::Devices;
 
     let title = format!(
@@ -22,13 +22,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(title)
-        .title_style(Theme::title_style(is_focused))
-        .border_style(Theme::border_style(is_focused));
+        .title_style(theme.title_style(is_focused))
+        .border_style(theme.border_style(is_focused))
+        .style(Style::default().bg(theme.bg_dark));
 
     if app.devices.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
             "  No devices · [w] Wi-Fi ADB",
-            Style::default().fg(Theme::TEXT_MUTED),
+            Style::default().fg(theme.text_muted),
         )]));
         let list = List::new(vec![empty_item]).block(block);
         frame.render_widget(list, area);
@@ -44,11 +45,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
             // Dot and badge: ● for active/selected device, ○ for others
             let (status_bullet, bullet_color) = if is_selected {
-                ("●", Theme::SUCCESS)
+                ("●", theme.success)
             } else if device.state == DeviceState::Device {
-                ("○", Theme::TEXT_MUTED)
+                ("○", theme.text_muted)
             } else {
-                ("■", Theme::WARNING)
+                ("■", theme.warning)
             };
 
             let mut spans = Vec::new();
@@ -59,7 +60,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             } else {
                 "  "
             };
-            spans.push(Span::styled(cursor, Style::default().fg(Theme::ACCENT)));
+            spans.push(Span::styled(cursor, Style::default().fg(theme.accent)));
 
             // Bullet icon
             spans.push(Span::styled(
@@ -78,17 +79,17 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
             let name_style = if is_selected {
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Theme::TEXT_PRIMARY)
+                Style::default().fg(theme.text_primary)
             };
             spans.push(Span::styled(model_name, name_style));
 
             // Connection type
             spans.push(Span::styled(
                 format!(" ({})", device.connection_type),
-                Style::default().fg(Theme::TEXT_MUTED),
+                Style::default().fg(theme.text_muted),
             ));
 
             // Non-ready state badge if applicable
@@ -96,7 +97,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 spans.push(Span::styled(
                     format!(" [{}]", device.state),
                     Style::default()
-                        .fg(Theme::WARNING)
+                        .fg(theme.warning)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -104,11 +105,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             // Battery level
             if let Some(battery) = device.battery_level {
                 let bat_color = if battery > 50 {
-                    Theme::SUCCESS
+                    theme.success
                 } else if battery > 20 {
-                    Theme::WARNING
+                    theme.warning
                 } else {
-                    Theme::ERROR
+                    theme.error
                 };
                 spans.push(Span::styled(
                     format!(" · {battery}%"),
@@ -121,19 +122,19 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 (Some(ver), Some(_)) => {
                     spans.push(Span::styled(
                         format!(" · Android {ver}"),
-                        Style::default().fg(Theme::TEXT_MUTED),
+                        Style::default().fg(theme.text_muted),
                     ));
                 }
                 (None, Some(api)) => {
                     spans.push(Span::styled(
                         format!(" · API {api}"),
-                        Style::default().fg(Theme::TEXT_MUTED),
+                        Style::default().fg(theme.text_muted),
                     ));
                 }
                 (Some(ver), None) => {
                     spans.push(Span::styled(
                         format!(" · Android {ver}"),
-                        Style::default().fg(Theme::TEXT_MUTED),
+                        Style::default().fg(theme.text_muted),
                     ));
                 }
                 (None, None) => {}
@@ -141,7 +142,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
             let item = ListItem::new(Line::from(spans));
             if is_selected && is_focused {
-                item.style(Theme::selected_style())
+                item.style(theme.selected_style())
             } else {
                 item
             }

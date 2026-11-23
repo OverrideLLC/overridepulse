@@ -6,11 +6,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::theme::Theme;
+use crate::ui::theme::ThemePalette;
 
-/// Renders the help overlay modal with rounded borders and comprehensive keybindings for v0.2.0.
-pub fn render(frame: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(68, 80, area);
+/// Renders the help overlay modal with rounded borders and comprehensive keybindings.
+pub fn render(frame: &mut Frame, area: Rect, theme: ThemePalette) {
+    let popup_area = centered_rect(68, 82, area);
 
     // Clear background behind popup
     frame.render_widget(Clear, popup_area);
@@ -21,18 +21,18 @@ pub fn render(frame: &mut Frame, area: Rect) {
         .title(" Help & Keybindings ")
         .title_style(
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .border_style(Style::default().fg(Theme::ACCENT))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let key_style = Style::default().fg(Theme::WARNING);
+    let key_style = Style::default().fg(theme.warning);
     let title_style = Style::default()
-        .fg(Theme::ACCENT)
+        .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
 
     let help_text = vec![
@@ -74,6 +74,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("Switch project (siblings and nearby Gradle projects)"),
         ]),
         Line::from(vec![
+            Span::styled("  T / O             ", key_style),
+            Span::raw("Cycle color theme (Shift+T) or reopen onboarding (Shift+O)"),
+        ]),
+        Line::from(vec![
             Span::styled("  y / Y             ", key_style),
             Span::raw("Copy logcat (y) or build output (Y) to the clipboard"),
         ]),
@@ -113,7 +117,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled(
                 "  Device Controls   ",
-                Style::default().fg(Theme::TEXT_MUTED),
+                Style::default().fg(theme.text_muted),
             ),
             Span::raw("Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Taps, Settings, Screenshot"),
         ]),

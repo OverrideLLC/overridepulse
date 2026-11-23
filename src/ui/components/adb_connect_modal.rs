@@ -7,12 +7,12 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::ui::theme::Theme;
 
 /// Renders the ADB Wireless Pair & Connect modal dialog with rounded borders,
 /// interactive text input fields, and keybinding navigation instructions:
 /// `[Tab] Switch Field │ [Enter] Pair & Connect │ [Esc] Cancel`
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let popup_area = centered_rect(62, 55, area);
 
     // Clear background behind modal popup
@@ -24,11 +24,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .title(" 📶 ADB Wireless Pair & Connect ")
         .title_style(
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .border_style(Style::default().fg(Theme::ACCENT))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = main_block.inner(popup_area);
     frame.render_widget(main_block, popup_area);
@@ -50,7 +50,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let intro_text = Line::from(vec![Span::styled(
         "Connect over Wi-Fi (Android 11+ Wireless Debugging or tcpip port):",
-        Style::default().fg(Theme::TEXT_MUTED),
+        Style::default().fg(theme.text_muted),
     )]);
     frame.render_widget(Paragraph::new(intro_text), vertical_chunks[0]);
 
@@ -58,10 +58,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let f1_active = app.adb_modal_field_index == 0;
     let f1_border_style = if f1_active {
         Style::default()
-            .fg(Theme::ACCENT)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Theme::INACTIVE_BORDER)
+        Style::default().fg(theme.inactive_border)
     };
     let f1_block = Block::default()
         .borders(Borders::ALL)
@@ -85,10 +85,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         f1_val,
         if f1_active {
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::TEXT_PRIMARY)
+            Style::default().fg(theme.text_primary)
         },
     )]))
     .block(f1_block);
@@ -98,10 +98,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let f2_active = app.adb_modal_field_index == 1;
     let f2_border_style = if f2_active {
         Style::default()
-            .fg(Theme::ACCENT)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Theme::INACTIVE_BORDER)
+        Style::default().fg(theme.inactive_border)
     };
     let f2_block = Block::default()
         .borders(Borders::ALL)
@@ -125,10 +125,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         f2_val,
         if f2_active {
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::TEXT_PRIMARY)
+            Style::default().fg(theme.text_primary)
         },
     )]))
     .block(f2_block);
@@ -138,10 +138,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let f3_active = app.adb_modal_field_index == 2;
     let f3_border_style = if f3_active {
         Style::default()
-            .fg(Theme::ACCENT)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Theme::INACTIVE_BORDER)
+        Style::default().fg(theme.inactive_border)
     };
     let f3_block = Block::default()
         .borders(Borders::ALL)
@@ -165,10 +165,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         f3_val,
         if f3_active {
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::TEXT_PRIMARY)
+            Style::default().fg(theme.text_primary)
         },
     )]))
     .block(f3_block);
@@ -176,10 +176,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     // Instructions footer
     let key_style = Style::default()
-        .fg(Theme::WARNING)
+        .fg(theme.warning)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(Theme::TEXT_PRIMARY);
-    let sep_style = Style::default().fg(Theme::TEXT_MUTED);
+    let desc_style = Style::default().fg(theme.text_primary);
+    let sep_style = Style::default().fg(theme.text_muted);
 
     let instructions = Line::from(vec![
         Span::styled("[Tab] ", key_style),

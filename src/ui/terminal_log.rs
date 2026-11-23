@@ -1,17 +1,18 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Gauge, Paragraph},
     Frame,
 };
 
 use crate::app::{AppState, Panel};
-use crate::ui::theme::Theme;
+use crate::ui::theme::ThemePalette;
 
 /// Renders the `[ Build & Process Output ]` panel with rounded borders,
 /// dynamic Gradle progress bar, and syntax highlighting.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let is_focused = app.current_panel == Panel::Output || app.current_panel == Panel::Console;
 
     let follow_tag = if app.auto_scroll_console {
@@ -30,8 +31,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(title)
-        .title_style(Theme::title_style(is_focused))
-        .border_style(Theme::border_style(is_focused));
+        .title_style(theme.title_style(is_focused))
+        .border_style(theme.border_style(is_focused))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -67,14 +69,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         let gauge = Gauge::default()
             .gauge_style(
                 Style::default()
-                    .fg(Theme::ACCENT)
-                    .bg(Color::Rgb(30, 36, 48)),
+                    .fg(theme.accent)
+                    .bg(theme.bg_card),
             )
             .percent(pct as u16)
             .label(Span::styled(
                 label,
                 Style::default()
-                    .fg(Theme::TEXT_PRIMARY)
+                    .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ));
         frame.render_widget(gauge, p_area);
@@ -95,14 +97,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .iter()
         .skip(start_idx)
         .take(visible_height)
-        .map(|line_text| highlight_line(line_text))
+        .map(|line_text| highlight_line(line_text, theme))
         .collect();
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, log_area);
 }
 
-fn highlight_line(line: &str) -> Line<'_> {
+fn highlight_line(line: &str, theme: ThemePalette) -> Line<'_> {
     let trimmed = line.trim_start();
 
     let style = if line.contains("BUILD SUCCESSFUL")
@@ -111,7 +113,7 @@ fn highlight_line(line: &str) -> Line<'_> {
         || line.contains("Successfully installed")
     {
         Style::default()
-            .fg(Theme::SUCCESS)
+            .fg(theme.success)
             .add_modifier(Modifier::BOLD)
     } else if line.contains("BUILD FAILED")
         || line.contains("FAILURE:")
@@ -120,18 +122,18 @@ fn highlight_line(line: &str) -> Line<'_> {
         || line.starts_with("Error:")
     {
         Style::default()
-            .fg(Theme::ERROR)
+            .fg(theme.error)
             .add_modifier(Modifier::BOLD)
     } else if line.contains("WARNING:") || line.starts_with("Warning:") {
-        Style::default().fg(Theme::WARNING)
+        Style::default().fg(theme.warning)
     } else if trimmed.starts_with("> Task :") || trimmed.starts_with("Task :") {
         Style::default()
-            .fg(Theme::ACCENT)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     } else if trimmed.starts_with('>') || trimmed.starts_with("Executing") {
-        Style::default().fg(Theme::ACCENT)
+        Style::default().fg(theme.accent)
     } else {
-        Style::default().fg(Theme::TEXT_PRIMARY)
+        Style::default().fg(theme.text_primary)
     };
 
     Line::from(vec![Span::styled(line, style)])

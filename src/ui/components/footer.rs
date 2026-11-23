@@ -7,19 +7,15 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::ui::theme::Theme;
 
-/// Renders the bottom footer bar with rounded borders:
-/// - Left side: Navigation and command keybindings:
-///   `[Tab] Panel │ [Enter] Run │ [m] View Mode │ [1/2/3] Toggle Panes │ [w] Wi-Fi ADB │ [v] Variant │ [?] Help │ [q] Quit`
-/// - Right side: Active project name, detected `applicationId`, and active build variant:
-///   `📦 MyApp (com.example.app) │ ⚡ Variant: debug`
+/// Renders the bottom footer bar with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Theme::INACTIVE_BORDER))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .border_style(Style::default().fg(theme.inactive_border))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -33,10 +29,10 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .split(inner);
 
     let key_style = Style::default()
-        .fg(Theme::WARNING)
+        .fg(theme.warning)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(Theme::TEXT_PRIMARY);
-    let sep_style = Style::default().fg(Theme::TEXT_MUTED);
+    let desc_style = Style::default().fg(theme.text_primary);
+    let sep_style = Style::default().fg(theme.text_muted);
 
     let shortcuts_line = if app.devices_view_active {
         Line::from(vec![
@@ -78,11 +74,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     };
 
     let mut info_spans = vec![
-        Span::styled("📦 ", Style::default().fg(Theme::ACCENT)),
+        Span::styled("📦 ", Style::default().fg(theme.accent)),
         Span::styled(
             &app.project.name,
             Style::default()
-                .fg(Theme::TEXT_PRIMARY)
+                .fg(theme.text_primary)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -90,14 +86,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     if app.project_loading {
         info_spans.push(Span::styled(
             " loading…",
-            Style::default().fg(Theme::WARNING),
+            Style::default().fg(theme.warning),
         ));
     } else if let Some(target) = app.project.active_target() {
         info_spans.push(Span::styled(" │ ", sep_style));
         info_spans.push(Span::styled(
             format!("{} {}", target.platform.icon(), target.display_label()),
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -106,7 +102,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         info_spans.push(Span::styled(
             format!(" ({}) ", app.project.active_variant),
             Style::default()
-                .fg(Theme::WARNING)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ));
     } else {

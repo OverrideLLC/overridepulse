@@ -8,11 +8,12 @@ use ratatui::{
 
 use crate::android::{LogEntry, LogLevel};
 use crate::app::{AppState, Panel};
-use crate::ui::theme::Theme;
+use crate::ui::theme::ThemePalette;
 
 /// Renders the `[ Live Logcat ]` stream viewer with rounded borders,
 /// severity color coding, application filtering, and search highlights.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let is_focused = app.current_panel == Panel::Logcat || app.current_panel == Panel::Console;
 
     let app_filter_tag = if app.logcat_filter_by_app {
@@ -45,8 +46,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(title)
-        .title_style(Theme::title_style(is_focused))
-        .border_style(Theme::border_style(is_focused));
+        .title_style(theme.title_style(is_focused))
+        .border_style(theme.border_style(is_focused))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(area);
     let visible_height = inner.height as usize;
@@ -72,7 +74,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .iter()
         .skip(start_idx)
         .take(visible_height)
-        .map(|entry| format_logcat_line(entry))
+        .map(|entry| format_logcat_line(entry, theme))
         .collect();
 
     let paragraph = Paragraph::new(lines).block(block);
@@ -85,7 +87,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 /// - `I` (Info): Verde
 /// - `W` (Warn): Amarillo
 /// - `E`/`F` (Error/Fatal): Rojo
-fn format_logcat_line(entry: &LogEntry) -> Line<'_> {
+fn format_logcat_line(entry: &LogEntry, theme: ThemePalette) -> Line<'_> {
     let (level_color, is_bold) = match entry.level {
         LogLevel::Verbose => (Color::DarkGray, false),
         LogLevel::Debug => (Color::Cyan, false),
@@ -106,7 +108,7 @@ fn format_logcat_line(entry: &LogEntry) -> Line<'_> {
     if let Some(ts) = &entry.timestamp {
         spans.push(Span::styled(
             format!("{ts} "),
-            Style::default().fg(Theme::TEXT_MUTED),
+            Style::default().fg(theme.text_muted),
         ));
     }
 
@@ -127,7 +129,7 @@ fn format_logcat_line(entry: &LogEntry) -> Line<'_> {
         spans.push(Span::styled(
             format!("{}: ", entry.tag),
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ));
     }

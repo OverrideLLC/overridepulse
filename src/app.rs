@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::android::{AndroidProject, Device, DeviceAction, LogEntry, QuickAction};
+use crate::ui::theme::{ThemePalette, ThemePreset};
 
 pub const DEFAULT_MAX_BUFFER_LINES: usize = 2000;
 pub const DEFAULT_MAX_SIMPLIFIED_EVENTS: usize = 100;
@@ -130,6 +131,11 @@ pub struct AppState {
     pub search_query: String,
     pub help_active: bool,
 
+    pub theme: ThemePreset,
+    pub onboarding_active: bool,
+    pub onboarding_step: usize,
+    pub selected_theme_index: usize,
+
     pub console_output: VecDeque<String>,
     pub max_console_lines: usize,
 
@@ -210,6 +216,10 @@ impl AppState {
             search_active: false,
             search_query: String::new(),
             help_active: false,
+            theme: ThemePreset::default(),
+            onboarding_active: false,
+            onboarding_step: 0,
+            selected_theme_index: 0,
             console_output: VecDeque::with_capacity(DEFAULT_MAX_BUFFER_LINES),
             max_console_lines: DEFAULT_MAX_BUFFER_LINES,
             logcat_entries: VecDeque::with_capacity(DEFAULT_MAX_BUFFER_LINES),
@@ -226,6 +236,55 @@ impl AppState {
             auto_scroll_logcat: true,
             should_quit: false,
         }
+    }
+
+    pub fn palette(&self) -> ThemePalette {
+        self.theme.palette()
+    }
+
+    pub fn set_theme(&mut self, theme: ThemePreset) {
+        self.theme = theme;
+        self.selected_theme_index = ThemePreset::all()
+            .iter()
+            .position(|t| *t == theme)
+            .unwrap_or(0);
+    }
+
+    pub fn open_onboarding(&mut self) {
+        self.onboarding_active = true;
+        self.onboarding_step = 0;
+        self.selected_theme_index = ThemePreset::all()
+            .iter()
+            .position(|t| *t == self.theme)
+            .unwrap_or(0);
+    }
+
+    pub fn next_theme(&mut self) {
+        let themes = ThemePreset::all();
+        if !themes.is_empty() {
+            self.selected_theme_index = (self.selected_theme_index + 1) % themes.len();
+            self.theme = themes[self.selected_theme_index];
+            self.status_message = Some(format!("Theme: {}", self.theme.name()));
+        }
+    }
+
+    pub fn prev_theme(&mut self) {
+        let themes = ThemePreset::all();
+        if !themes.is_empty() {
+            if self.selected_theme_index == 0 {
+                self.selected_theme_index = themes.len() - 1;
+            } else {
+                self.selected_theme_index -= 1;
+            }
+            self.theme = themes[self.selected_theme_index];
+            self.status_message = Some(format!("Theme: {}", self.theme.name()));
+        }
+    }
+
+    pub fn complete_onboarding(&mut self) {
+        self.onboarding_active = false;
+        self.onboarding_step = 0;
+        self.status_message = Some(format!("Ready · Theme: {}", self.theme.name()));
     }
 
     pub fn selected_device(&self) -> Option<&Device> {
@@ -1098,5 +1157,24 @@ mod tests {
         assert_eq!(app.selected_action_index, cols);
         app.scroll_up();
         assert_eq!(app.selected_action_index, 0);
+    }
+
+    #[test]
+    fn test_theme_cycling_and_onboarding() {
+        let mut app = AppState::new(PathBuf::from("."));
+        assert_eq!(app.theme, ThemePreset::OverrideCyan);
+        assert!(!app.onboarding_active);
+
+        app.open_onboarding();
+        assert!(app.onboarding_active);
+        assert_eq!(app.onboarding_step, 0);
+
+        app.next_theme();
+        assert_eq!(app.theme, ThemePreset::TokyoNight);
+        app.prev_theme();
+        assert_eq!(app.theme, ThemePreset::OverrideCyan);
+
+        app.complete_onboarding();
+        assert!(!app.onboarding_active);
     }
 }

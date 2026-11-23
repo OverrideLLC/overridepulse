@@ -1,13 +1,12 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph},
     Frame,
 };
 
 use crate::app::{AppState, Panel};
-use crate::ui::theme::Theme;
 
 /// Formats the parity navigation bar showing which console panes are active:
 /// `[m] View │ [1] Simplified (ON/OFF) │ [2] Build (ON/OFF) │ [3] Logcat (ON/OFF)`
@@ -27,6 +26,7 @@ pub fn console_parity_bar(app: &AppState) -> String {
 /// Renders the Simplified Status pane with a clean status header,
 /// live timer/progress only while active, and recent operation history.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let is_focused = app.current_panel == Panel::Console || app.current_panel == Panel::Output;
 
     let title = " [1] Status │ [2] Build  [3] Logcat ";
@@ -35,9 +35,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(title)
-        .title_style(Theme::title_style(is_focused))
-        .border_style(Theme::border_style(is_focused))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .title_style(theme.title_style(is_focused))
+        .border_style(theme.border_style(is_focused))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -86,13 +86,13 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             Span::styled(
                 format!("{spinner} Running: "),
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 desc,
                 Style::default()
-                    .fg(Theme::TEXT_PRIMARY)
+                    .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ),
         ]);
@@ -100,8 +100,8 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
         let timer_eta = app.process_state.elapsed_and_eta_display();
         let timer_line = Line::from(vec![
-            Span::styled("⏱ ", Style::default().fg(Theme::WARNING)),
-            Span::styled(timer_eta, Style::default().fg(Theme::WARNING)),
+            Span::styled("⏱ ", Style::default().fg(theme.warning)),
+            Span::styled(timer_eta, Style::default().fg(theme.warning)),
         ]);
         frame.render_widget(Paragraph::new(timer_line), status_subchunks[1]);
 
@@ -113,14 +113,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         let gauge = Gauge::default()
             .gauge_style(
                 Style::default()
-                    .fg(Theme::ACCENT)
-                    .bg(Color::Rgb(30, 36, 48)),
+                    .fg(theme.accent)
+                    .bg(theme.bg_card),
             )
             .percent(pct as u16)
             .label(Span::styled(
                 gauge_label,
                 Style::default()
-                    .fg(Theme::TEXT_PRIMARY)
+                    .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ));
         frame.render_widget(gauge, status_subchunks[2]);
@@ -129,7 +129,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             Line::from(vec![Span::styled(
                 "⏳ Loading project…",
                 Style::default()
-                    .fg(Theme::WARNING)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             )])
         } else if let Some(ref msg) = app.status_message {
@@ -138,21 +138,21 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                     Span::styled(
                         "❌ ",
                         Style::default()
-                            .fg(Theme::ERROR)
+                            .fg(theme.error)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(msg, Style::default().fg(Theme::TEXT_PRIMARY)),
+                    Span::styled(msg, Style::default().fg(theme.text_primary)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled("● ", Style::default().fg(Theme::SUCCESS)),
-                    Span::styled(msg, Style::default().fg(Theme::TEXT_PRIMARY)),
+                    Span::styled("● ", Style::default().fg(theme.success)),
+                    Span::styled(msg, Style::default().fg(theme.text_primary)),
                 ])
             }
         } else {
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(Theme::SUCCESS)),
-                Span::styled("Ready", Style::default().fg(Theme::TEXT_PRIMARY)),
+                Span::styled("● ", Style::default().fg(theme.success)),
+                Span::styled("Ready", Style::default().fg(theme.text_primary)),
             ])
         };
         frame.render_widget(Paragraph::new(state_line), status_area);
@@ -163,7 +163,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     if app.simplified_events.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
             "  No operations yet · [b] build  [r] run  [t] target",
-            Style::default().fg(Theme::TEXT_MUTED),
+            Style::default().fg(theme.text_muted),
         )]));
         frame.render_widget(List::new(vec![empty_item]), events_area);
     } else {
@@ -174,11 +174,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             .take(visible_items)
             .map(|event_str| {
                 let style = if event_str.starts_with('✅') || event_str.contains("Success") {
-                    Style::default().fg(Theme::SUCCESS)
+                    Style::default().fg(theme.success)
                 } else if event_str.starts_with('❌') || event_str.contains("Failed") {
-                    Style::default().fg(Theme::ERROR)
+                    Style::default().fg(theme.error)
                 } else {
-                    Style::default().fg(Theme::TEXT_PRIMARY)
+                    Style::default().fg(theme.text_primary)
                 };
                 ListItem::new(Line::from(vec![Span::styled(
                     format!("  {event_str}"),

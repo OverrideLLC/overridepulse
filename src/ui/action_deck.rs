@@ -8,7 +8,6 @@ use ratatui::{
 use crate::android::QuickAction;
 use crate::app::{grid_cols_for_width, AppState, Panel};
 use crate::ui::grid::{render_card_grid, GridCardItem};
-use crate::ui::theme::Theme;
 
 fn concise_action_title(action: QuickAction, app: &AppState) -> String {
     let target = app.project.active_target();
@@ -27,6 +26,7 @@ fn concise_action_title(action: QuickAction, app: &AppState) -> String {
 
 /// Renders the Actions panel as a responsive card grid.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let is_focused = app.current_panel == Panel::Actions;
     let active_target = app.project.active_target();
 
@@ -45,9 +45,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(panel_title)
-        .title_style(Theme::title_style(is_focused))
-        .border_style(Theme::border_style(is_focused))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .title_style(theme.title_style(is_focused))
+        .border_style(theme.border_style(is_focused))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -70,5 +70,6 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         app.selected_action_index,
         is_focused,
         cols,
+        theme,
     );
 }

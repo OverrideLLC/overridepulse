@@ -7,10 +7,10 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::ui::theme::Theme;
 
-/// Renders the interactive Android project selector modal with rounded borders.
+/// Renders the interactive project selector modal with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let popup_area = centered_rect(75, 65, area);
 
     // Clear background behind popup
@@ -26,11 +26,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         })
         .title_style(
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .border_style(Style::default().fg(Theme::ACCENT))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -41,18 +41,18 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 Line::from(vec![Span::styled(
                     "Scanning nearby Android projects…",
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 )]),
                 Line::raw(""),
                 Line::from(vec![Span::styled(
                     "The interface stays responsive while the scan runs.",
-                    Style::default().fg(Theme::TEXT_MUTED),
+                    Style::default().fg(theme.text_muted),
                 )]),
                 Line::raw(""),
                 Line::from(vec![Span::styled(
                     "[Esc] Dismiss",
-                    Style::default().fg(Theme::WARNING),
+                    Style::default().fg(theme.warning),
                 )]),
             ];
             frame.render_widget(Paragraph::new(scanning), inner);
@@ -62,37 +62,37 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             Line::from(vec![Span::styled(
                 "⚠️  No Android projects found nearby",
                 Style::default()
-                    .fg(Theme::WARNING)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::raw(""),
             Line::from(vec![Span::styled(
                 "OverridePulse scanned up to 3 directory levels from: ",
-                Style::default().fg(Theme::TEXT_MUTED),
+                Style::default().fg(theme.text_muted),
             )]),
             Line::from(vec![Span::styled(
                 format!("  {}", app.project.root_path.display()),
-                Style::default().fg(Theme::TEXT_PRIMARY),
+                Style::default().fg(theme.text_primary),
             )]),
             Line::raw(""),
             Line::from(vec![Span::styled(
                 "Please navigate to an Android project folder and run overridepulse,",
-                Style::default().fg(Theme::TEXT_MUTED),
+                Style::default().fg(theme.text_muted),
             )]),
             Line::from(vec![
                 Span::styled(
                     "or specify the project root via: ",
-                    Style::default().fg(Theme::TEXT_MUTED),
+                    Style::default().fg(theme.text_muted),
                 ),
                 Span::styled(
                     "overridepulse --project <PATH>",
-                    Style::default().fg(Theme::ACCENT),
+                    Style::default().fg(theme.accent),
                 ),
             ]),
             Line::raw(""),
             Line::from(vec![Span::styled(
                 "[Esc] / [q] Dismiss",
-                Style::default().fg(Theme::WARNING),
+                Style::default().fg(theme.warning),
             )]),
         ];
         let paragraph = Paragraph::new(empty_msg);
@@ -126,26 +126,26 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
             let name_style = if is_selected {
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Theme::TEXT_PRIMARY)
+                Style::default().fg(theme.text_primary)
             };
 
             let line = Line::from(vec![
-                Span::styled(cursor, Style::default().fg(Theme::ACCENT)),
-                Span::styled(format!("{idx}. "), Style::default().fg(Theme::TEXT_MUTED)),
+                Span::styled(cursor, Style::default().fg(theme.accent)),
+                Span::styled(format!("{idx}. "), Style::default().fg(theme.text_muted)),
                 Span::styled(project_name, name_style),
-                Span::styled(current_badge, Style::default().fg(Theme::SUCCESS)),
+                Span::styled(current_badge, Style::default().fg(theme.success)),
                 Span::styled(
                     format!("  ({})", path.display()),
-                    Style::default().fg(Theme::TEXT_MUTED),
+                    Style::default().fg(theme.text_muted),
                 ),
             ]);
 
             let item = ListItem::new(line);
             if is_selected {
-                item.style(Theme::selected_style())
+                item.style(theme.selected_style())
             } else {
                 item
             }
@@ -159,21 +159,21 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled(
             "[Enter]",
             Style::default()
-                .fg(Theme::WARNING)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" Open Project  "),
         Span::styled(
             "[↑/↓ or k/j]",
             Style::default()
-                .fg(Theme::WARNING)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" Navigate  "),
         Span::styled(
             "[Esc/p]",
             Style::default()
-                .fg(Theme::WARNING)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" Close"),

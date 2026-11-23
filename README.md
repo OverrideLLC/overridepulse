@@ -1,164 +1,159 @@
+<div align="center">
+
 # OverridePulse ⚡
 
-[![Crates.io](https://img.shields.io/crates/v/overridepulse.svg)](https://crates.io/crates/overridepulse)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
-[![GitHub](https://img.shields.io/github/v/release/OverrideLLC/overridepulse?include_prereleases&label=release)](https://github.com/OverrideLLC/overridepulse/releases)
+**Ultralightweight terminal workspace for Android, Kotlin Multiplatform (KMP) & Gradle**
 
-> **Ultralightweight TUI for Android, Kotlin Multiplatform (KMP) & Gradle development**
+*Compile Android, JVM/Desktop, WasmJS, and JS targets, stream app logs, and manage ADB devices — at keyboard speed.*
 
-OverridePulse is an ultra-fast, asynchronous terminal user interface (TUI) designed to streamline Android, Kotlin Multiplatform, and Gradle development workflows. Stop wrestling with bloated IDE windows or typing repetitive Gradle/ADB commands—compile and run Android, JVM/Desktop, WasmJS, and JS targets, manage ADB devices in a dedicated view, inspect logcat streams, and control Gradle daemons with single-key shortcuts.
+[![Crates.io](https://img.shields.io/crates/v/overridepulse.svg?style=flat-square&color=4FC3F7)](https://crates.io/crates/overridepulse)
+[![GitHub Release](https://img.shields.io/github/v/release/OverrideLLC/overridepulse?style=flat-square&color=66BB6A)](https://github.com/OverrideLLC/overridepulse/releases)
+[![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg?style=flat-square)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
 
----
+[✨ Latest Release](#-latest-release--v031) • [🧩 KMP Targets](#-supported-targets) • [🎨 Themes](#-themes--onboarding) • [📦 Install](#-installation) • [⌨️ Shortcuts](#️-keyboard-shortcuts) • [📜 Changelog](CHANGELOG.md)
 
-## 🌟 What's New in v0.3.0
-
-- 🧩 **Kotlin Multiplatform (KMP) Support (`[t]`)**: Automatically detects `Android`, `JVM / Compose Desktop`, `WasmJS`, and `JS` targets across Gradle modules. Press `[t]` to switch targets and run host builds, dev servers (`wasmJsBrowserDevelopmentRun`, `jsBrowserDevelopmentRun`, `run`), distribution bundles, and tests without requiring an attached ADB device.
-- 🗂 **Card-Grid Actions & Simplified Default Layout**: Actions and ADB Controls render in a responsive rounded card grid (`←/→/↑/↓`), while the startup screen focuses solely on the Actions grid and `[1] Status` pane.
-- 📱 **Separate Devices & ADB View (`[d]`)**: Devices and ADB hardware controls now live in a dedicated view toggled with `[d]` (and dismissed with `d` or `Esc`), keeping the main workspace uncluttered.
-- 🛑 **Clean Dev-Server Cancellation**: Cancelling running tasks with `Esc` or `Ctrl+X` terminates the Unix process group cleanly so dev servers don't linger in the background.
+</div>
 
 ---
 
-## 🌟 What's New in v0.2.2
-
-- ⚡ **Non-blocking project load**: Gradle and build-output scans run off the UI thread, so opening a large project no longer freezes the TUI.
-- 📂 **In-app project switching (`[p]`)**: Lists the current project, its siblings, and one nested level. `Enter` opens the selection without blocking the interface.
-- 🔍 **App logcat by UID**: Streams every process of the application (`--uid`), including `:push` and WebView workers, and debug builds that use an `applicationId` suffix. Ordinary app lines are no longer hidden just because they omit the package name. `[f]` toggles all-device logcat.
-- 📋 **Copy consoles (`[y]` / `[Y]`)**: Copy live logcat or build output to the system clipboard (`wl-copy`, `xclip`, `xsel`) or the terminal clipboard.
-
----
-
-## 🌟 What's New in v0.2.1
-
-- 🎯 **Strict Android Application Module Detection**: Complete multi-module and Kotlin Multiplatform (KMP / Clean Architecture) resolution. Accurately prioritizes application modules (`:composeApp`, `:androidApp`, `:app`) over library domain/data modules (`:auth:domain`, `:core:data`), completely preventing library namespace misclassification.
-- 📦 **Infallible Direct APK Package Resolution**: Automatic detection of `output-metadata.json` directly adjacent to the compiled APK file.
-- 📂 **Multi-Line Settings & KMP Manifest Support**: Robust multi-line `include(...)` parser for `settings.gradle[.kts]` and full support for Kotlin Multiplatform `src/androidMain/AndroidManifest.xml`.
-
----
-
-## 🌟 What's New in v0.2.0
-
-- 🎯 **Deep `applicationId` Detection**: Multi-pass resolution inspecting Kotlin DSL (`build.gradle.kts`), Groovy DSL (`build.gradle`), `namespace`, `gradle.properties`, and automatic fallback to `build/outputs/apk/**/output-metadata.json`.
-- 🔍 **App-Only Exclusive Logcat (`--pid=<pid>`)**: Logcat streaming is 100% isolated to the target application's active process ID. No system spam, no unwanted third-party logs.
-- 🚀 **Auto-Launch After Install**: Building and deploying APK (`[b]`) or AAB automatically detects the main launcher activity or launcher alias and launches the app immediately upon install.
-- 📶 **Interactive ADB Wireless Pair & Connect Modal (`[w]`)**: Pair with 6-digit wireless debugging codes (Android 11+) and connect seamlessly without leaving the terminal.
-- 🎛️ **Direct ADB Hardware & System Controls**: Dedicated upper panel for toggling Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Touch feedback taps, taking screenshots, rebooting, and enabling `tcpip 5555`.
-- 📊 **Configurable Multi-Pane Console**: Toggle Simplified event summary (`[1]`), Raw Build output (`[2]`), and Live Logcat (`[3]`), or cycle between view presets (`[m]`/`[l]`).
-- 🧹 **Optimized Headerless UI**: Space-saving layout with project status and active variant consolidated cleanly into the bottom footer bar.
+```text
+╭─ Actions · 🕸 WasmJS (:composeApp) ───────────────────────────────────────────╮
+│ ╭──────────────────────╮ ╭──────────────────────╮ ╭──────────────────────╮   │
+│ │ ▶ [b] Compile WasmJS │ │   [r] Run WasmJS Dev │ │   Bundle WasmJS Dist │   │
+│ ╰──────────────────────╯ ╰──────────────────────╯ ╰──────────────────────╯   │
+│ ╭──────────────────────╮ ╭──────────────────────╮ ╭──────────────────────╮   │
+│ │   Run WasmJS Tests   │ │   Assemble All       │ │   [g] Stop Gradle    │   │
+│ ╰──────────────────────╯ ╰──────────────────────╯ ╰──────────────────────╯   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ [1] Status │ [2] Build  [3] Logcat ─────────────────────────────────────────╮
+│ ● Target: WasmJS (:composeApp)                                               │
+│   ✅ :composeApp:wasmJsBrowserDistribution completed (3.4s)                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ [t] Target  [p] Project  [d] Devices  [1/2/3] Views  [?] Help │ 📦 PulseApp  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
 
 ---
 
-## ✨ Core Features
+## ✨ Latest Release — v0.3.1
 
-- **⚡ Blazing Fast & Memory Efficient**: Built natively in Rust (Ratatui + Tokio). Consumes negligible CPU and RAM compared to standard IDEs.
-- **📱 Real-time ADB Device Monitor**: Automatic auto-discovery and state tracking for physical USB devices, emulators, and wireless ADB targets.
-- **🚀 One-Key Quick Actions**:
-  - `[b]` Assemble & install debug APK (auto-launches on completion)
-  - `[r]` Relaunch main launcher activity (`am start -W`)
-  - `[k]` Force-stop application process (`am force-stop`)
-  - `[u]` Completely uninstall application (`adb uninstall`)
-  - `[g]` **Stop all running Gradle daemons (`./gradlew --stop`) & terminate orphan processes**
-  - `[w]` Open ADB Wireless Pair & Connect modal
-  - `Enter / Space` on **App & Gradle Actions**: Clear app data (`pm clear`), Build AAB & deploy, Launch `scrcpy`.
-  - `Enter / Space` on **Device Controls**: Wi-Fi, Mobile Data, Stay Awake, Dark Theme, Taps, Settings, Screenshot, Reboot.
-- **📜 Live Non-blocking Logcat**: High-throughput log viewer with level colorization, real-time query filtering, and app-wide UID isolation (every process of the package).
-- **📂 Multi-Project Discovery**: Interactive project selector (`[p]`) with automatic detection of Gradle modules, application IDs, and build variants.
-- **🛑 Zero UI Blocking**: All ADB and Gradle operations run in asynchronous Tokio background tasks with live progress indicators.
+- 👋 **First-Run Onboarding Wizard**: Greets new users with a concise quick-start guide and interactive setup (`Shift+O` or `--onboarding` to reopen anytime).
+- 🎨 **6 Live-Preview Color Themes**: Switch between `Override Cyan`, `Tokyo Night`, `Catppuccin Mocha`, `Dracula`, `Gruvbox Dark`, and `Emerald Matrix` with real-time preview (`Shift+T` cycles themes anytime).
+- 💾 **Persistent User Preferences**: Automatically saves your theme and onboarding state to `~/.config/overridepulse/config`.
+
+> Looking for earlier releases (`v0.3.0`, `v0.2.2`, `v0.2.1`, `v0.2.0`, `v0.1.0`)? See the full history in **[CHANGELOG.md](CHANGELOG.md)**.
+
+---
+
+## 🧩 Supported Targets
+
+OverridePulse scans `settings.gradle[.kts]` and module `build.gradle[.kts]` files asynchronously off the UI thread and lets you switch targets with **`[t]`**:
+
+| Target | Compile / Build (`[b]`) | Run / Dev Server (`[r]`) | Distribution & Tests | ADB Required? |
+|---|---|---|---|---|
+| 🤖 **Android** | `assembleDebug` + `adb install` + auto-launch | Relaunch main launcher activity | `bundletool` AAB deploy, clear data, force-stop, uninstall, `scrcpy` | Yes (`[d]` view) |
+| ☕ **JVM / Desktop** | `<target>Jar` / `jar` | `run` (Compose Desktop / Application) or `<target>Run` | `packageDistributionForCurrentOS` / `installDist` / `test` | No |
+| 🕸 **WasmJS** | `compileKotlinWasmJs` | `wasmJsBrowserDevelopmentRun` / Node dev run | `wasmJsBrowserDistribution` / `wasmJsTest` | No |
+| 🟨 **JS** | `compileKotlinJs` | `jsBrowserDevelopmentRun` / Node dev run | `jsBrowserDistribution` / `jsTest` | No |
+
+---
+
+## ⚡ Why OverridePulse?
+
+- **Zero IDE Bloat**: Built in Rust (`ratatui` + `crossterm` + `tokio`) with minimal CPU and memory overhead.
+- **Calm, Focused Workspace**: Opens straight to your **Actions Card Grid** and **`[1] Status`** pane—raw Gradle logs (`[2]`), live UID-scoped Logcat (`[3]`), and **Devices & ADB Controls** (`[d]`) stay one keypress away.
+- **Clean Dev-Server Lifecycle**: Cancelling with `Esc` or `Ctrl+X` terminates the Unix process group cleanly so background Webpack or Desktop processes don't linger.
+- **Multi-Project Ready**: Press **`[p]`** to switch between sibling or nested Gradle/KMP projects without restarting.
+
+---
+
+## 🎨 Themes & Onboarding
+
+On first launch, OverridePulse walks you through a 2-step setup:
+1. Quick overview of KMP targets, card-grid actions, and views.
+2. Live theme selector with color swatches:
+   - `Override Cyan` · `Tokyo Night` · `Catppuccin Mocha` · `Dracula` · `Gruvbox Dark` · `Emerald Matrix`
+
+You can cycle themes anytime with **`Shift+T`** or reopen the wizard with **`Shift+O`** (`--onboarding`).
 
 ---
 
 ## 📦 Installation
 
 ### From Crates.io
-
 ```bash
 cargo install overridepulse
 ```
 
 ### From GitHub
-
 ```bash
 cargo install --git https://github.com/OverrideLLC/overridepulse
 ```
 
 ### From Source
-
 ```bash
 git clone https://github.com/OverrideLLC/overridepulse.git
 cd overridepulse
-cargo build --release
-sudo cp target/release/overridepulse /usr/local/bin/
+cargo install --path .
 ```
 
 ### Prerequisites
-
-- **Android SDK Platform-Tools** (`adb` in your `PATH` or standard SDK location).
-- **Gradle** / Gradle Wrapper (`./gradlew` in project root).
-- *(Optional)* **scrcpy** for screen mirroring.
-- *(Optional)* **bundletool** for Android App Bundle deployments.
+- **Gradle** / Gradle Wrapper (`./gradlew` in your project root).
+- *(For Android targets)* **Android SDK Platform-Tools** (`adb` in `PATH` or standard SDK location).
+- *(Optional)* **scrcpy** for screen mirroring and **bundletool** for `.aab` deployments.
 
 ---
 
 ## 🚀 Usage
 
-Launch OverridePulse inside any Android project directory:
-
 ```bash
+# Open in the current Android / KMP project
 overridepulse
-```
 
-Or specify options explicitly:
+# Target a specific project directory
+overridepulse --project /path/to/kmp-or-android-project
 
-```bash
-# Target a specific Android project directory
-overridepulse --project /path/to/android/project
-
-# Target a specific ADB device by serial
+# Target a specific ADB device serial
 overridepulse --device emulator-5554
 
-# Custom UI refresh rate (in ms)
-overridepulse --tick-rate 100
+# Reopen the onboarding & theme setup wizard
+overridepulse --onboarding
 ```
 
 ---
 
 ## ⌨️ Keyboard Shortcuts
 
-### Navigation & Panes
-
+### Navigation & Workspace
 | Key | Action |
 |---|---|
-| `Tab` / `Shift+Tab` | Cycle focus between panels (`Actions` ↔ `Console`, or `Devices` ↔ `ADB Controls`) |
-| `←` / `→` / `↑` / `↓` | Navigate card grid, device list, or scroll console logs |
-| `1` | Toggle Simplified status pane |
-| `2` | Toggle Raw Build Output pane |
-| `3` | Toggle Live Logcat pane |
-| `m` or `l` | Cycle console view presets (Simplified / Build / Logcat / Parity / Triple) |
+| `Tab` / `Shift+Tab` | Cycle panels (`Actions` ↔ `Console`, or `Devices` ↔ `ADB Controls`) |
+| `←` `→` `↑` `↓` | Navigate card grid, device list, or scroll console logs |
+| `Enter` / `Space` | Run highlighted card / select active device |
 | `t` | Cycle KMP target (`Android` / `JVM` / `WasmJS` / `JS`) |
-| `d` | Open / close separate Devices & ADB Controls view |
-| `w` | Open ADB Wireless Pair & Connect modal |
-| `v` | Cycle active Android build variant (`debug`, `release`, etc.) |
-| `p` | Switch Gradle / KMP project (current, siblings, and one nested level) |
-| `y` / `Y` | Copy logcat (`y`) or build output (`Y`) to the clipboard |
-| `f` | Toggle logcat between this app and all device logs |
-| `?` | Toggle help overlay modal |
+| `d` | Open / close separate **Devices & ADB Controls** view |
+| `p` | Switch Gradle / KMP project |
+| `1` / `2` / `3` | Toggle **Status**, **Build Output**, or **Live Logcat** pane |
+| `m` / `l` | Cycle console view presets |
+| `T` (`Shift+T`) | Cycle color theme with live preview |
+| `O` (`Shift+O`) | Reopen onboarding & theme wizard |
+| `?` | Toggle help overlay |
 | `q` / `Ctrl+C` | Quit OverridePulse |
-| `Esc` / `Ctrl+X` | Cancel running background task, close Devices view, or dismiss modal |
 
-### Actions & Device Controls
-
-| Key | Action | Description |
-|---|---|---|
-| `Enter` / `Space` | **Execute Highlighted Action** | Executes selected Action or Device Control / Selects device |
-| `[b]` | **Build / Compile Target** | Android: `assembleDebug` + install; KMP: compiles active JVM/WasmJS/JS target |
-| `[r]` | **Run / Relaunch** | Android: relaunches main activity; KMP: runs app or dev server |
-| `[k]` | **Force Stop App** | Terminates app process immediately (`adb shell am force-stop`) |
-| `[u]` | **Uninstall App** | Uninstalls package from device (`adb uninstall`) |
-| `[g]` | **Stop All Gradle Daemons** | Stops daemons with `./gradlew --stop` and cleans orphaned processes |
-| `[w]` | **Wireless ADB Connect** | Interactive modal for pairing & connecting over Wi-Fi |
-
-*Note*: Actions like **Clear App Data**, **Build AAB & Deploy**, and **Launch Scrcpy** are safely selected from the **App & Gradle Actions** list via `Enter` or `Space` to avoid unintentional key collisions.
+### Build, Target & ADB Actions
+| Key | Action |
+|---|---|
+| `b` | Build & install APK (Android) or compile active KMP target |
+| `r` | Relaunch app (Android) or start run / dev server (JVM / WasmJS / JS) |
+| `g` | Stop all Gradle daemons (`./gradlew --stop`) |
+| `k` / `u` | Force-stop (`k`) or uninstall (`u`) Android app |
+| `v` | Cycle Android build variant (`debug`, `release`, flavors) |
+| `w` | Open ADB Wireless Pair & Connect modal |
+| `f` / `/` | Toggle app-only UID Logcat (`f`) or filter logs (`/`) |
+| `y` / `Y` | Copy Logcat (`y`) or Build Output (`Y`) to clipboard |
+| `Esc` / `Ctrl+X` | Cancel running build/dev server, close Devices view, or dismiss modal |
 
 ---
 
@@ -173,21 +168,18 @@ overridepulse --tick-rate 100
                 ┌──────────────┴──────────────┐
                 ▼                             ▼
    ┌─────────────────────────┐   ┌─────────────────────────┐
-   │    AppState & Events    │   │  Asynchronous Engines   │
+   │    AppState & Config    │   │  Asynchronous Engines   │
+   │ - KMP target state      │   │ - Gradle & KMP scanner  │
+   │ - Theme & user config   │   │ - ProcessRunner (PGID)  │
    │ - Ring buffers (Deq)    │   │ - DeviceMonitor (ADB)   │
-   │ - Multi-project state   │   │ - LogcatStream (PID-ex) │
-   │ - Focus & Modal states  │   │ - ProcessRunner (Tokio) │
-   │ - Multi-pane Parity     │   │ - DeviceAction Toggles  │
+   │ - Card-grid navigation  │   │ - LogcatStream (UID)    │
    └─────────────────────────┘   └─────────────────────────┘
 ```
-
-- **Ring Buffers**: Output terminals maintain memory-bounded `VecDeque` buffers (2,000 lines for raw build, 100 entries for simplified view) preventing memory exhaustion.
-- **Safety First**: Implements RAII `TerminalGuard` and custom panic hooks ensuring your terminal emulator is cleanly restored to normal mode under all circumstances.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for details.
+Licensed under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Override LLC & ChristopherTwo.

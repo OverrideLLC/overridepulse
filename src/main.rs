@@ -21,7 +21,7 @@ use overridepulse::{
     },
     app::{AppState, Panel, ViewMode},
     clipboard::{self, CopyMethod},
-    config::SdkConfig,
+    config::{SdkConfig, UserConfig},
     event::{AppEvent, EventHandler},
     ui,
 };
@@ -31,10 +31,10 @@ use overridepulse::{
     name = "overridepulse",
     author = "OverridePulse Contributors",
     version,
-    about = "Ultralightweight TUI for Android & Gradle development (Lazygit for Android developers)"
+    about = "Ultralightweight TUI for Android, Kotlin Multiplatform (KMP) & Gradle development"
 )]
 struct Cli {
-    /// Path to Android project root (defaults to current directory)
+    /// Path to Android / KMP project root (defaults to current directory)
     #[arg(short, long, value_name = "PATH")]
     project: Option<PathBuf>,
 
@@ -45,6 +45,10 @@ struct Cli {
     /// UI tick rate in milliseconds (default: 100)
     #[arg(long, default_value_t = 100)]
     tick_rate: u64,
+
+    /// Show the onboarding and theme setup wizard
+    #[arg(long)]
+    onboarding: bool,
 }
 
 /// RAII Guard ensuring terminal restoration even if exiting via early return or error.
@@ -97,8 +101,13 @@ async fn main() -> Result<()> {
     // 4. Initialize State and Event Handler.
     // Project detection walks Gradle files and build outputs, so it runs off
     // the UI thread. The first frame paints immediately.
+    let user_config = UserConfig::load();
     let mut app = AppState::pending(root_path.clone());
     app.target_device_serial = cli.device.clone();
+    app.set_theme(user_config.theme);
+    if cli.onboarding || !user_config.onboarding_completed {
+        app.open_onboarding();
+    }
     if let Ok(area) = terminal.size() {
         app.terminal_width = area.width;
     }
@@ -505,6 +514,19 @@ fn sync_logcat_stream(
     }
 }
 
+fn persist_user_config(app: &AppState) {
+    #[cfg(not(test))]
+    {
+        let cfg = UserConfig {
+            onboarding_completed: true,
+            theme: app.theme,
+        };
+        let _ = cfg.save();
+    }
+    #[cfg(test)]
+    let _ = app;
+}
+
 fn handle_key_event(
     app: &mut AppState,
     runner: &mut ProcessRunner,
@@ -514,6 +536,50 @@ fn handle_key_event(
     sender: &UnboundedSender<AppEvent>,
 ) {
     if key.kind != KeyEventKind::Press {
+        return;
+    }
+
+    // Modal: First-run Onboarding & Theme Picker
+    if app.onboarding_active {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            app.should_quit = true;
+            return;
+        }
+        if app.onboarding_step == 0 {
+            match key.code {
+                KeyCode::Enter | KeyCode::Right | KeyCode::Tab | KeyCode::Char(' ') => {
+                    app.onboarding_step = 1;
+                }
+                KeyCode::Esc => {
+                    app.complete_onboarding();
+                    persist_user_config(app);
+                }
+                KeyCode::Char('q') => {
+                    app.should_quit = true;
+                }
+                _ => {}
+            }
+        } else {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.prev_theme();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.next_theme();
+                }
+                KeyCode::Left | KeyCode::BackTab | KeyCode::Backspace => {
+                    app.onboarding_step = 0;
+                }
+                KeyCode::Enter | KeyCode::Esc => {
+                    app.complete_onboarding();
+                    persist_user_config(app);
+                }
+                KeyCode::Char('q') => {
+                    app.should_quit = true;
+                }
+                _ => {}
+            }
+        }
         return;
     }
 
@@ -700,6 +766,15 @@ fn handle_key_event(
         KeyCode::Char('t') => {
             app.next_target();
             sync_logcat_stream(app, logcat_stream, adb_path, sender);
+        }
+        // Theme cycle (Shift+T)
+        KeyCode::Char('T') => {
+            app.next_theme();
+            persist_user_config(app);
+        }
+        // Reopen onboarding & theme wizard (Shift+O)
+        KeyCode::Char('O') => {
+            app.open_onboarding();
         }
         // Toggle separate Devices & ADB Controls view
         KeyCode::Char('d') => {
@@ -1085,5 +1160,41 @@ mod tests {
         let key_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_esc, &adb_path, &tx);
         while rx.try_recv().is_ok() {}
+    }
+
+    #[test]
+    fn test_onboarding_flow_and_theme_selection() {
+        use overridepulse::ui::theme::ThemePreset;
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.open_onboarding();
+        assert!(app.onboarding_active);
+        assert_eq!(app.onboarding_step, 0);
+
+        let mut runner = ProcessRunner::new();
+        let mut logcat = LogcatStream::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let adb_path = PathBuf::from("adb");
+
+        // Enter advances from Welcome (0) to Theme Picker (1)
+        let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
+        assert_eq!(app.onboarding_step, 1);
+
+        // Down previews the next theme live
+        let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_down, &adb_path, &tx);
+        assert_eq!(app.theme, ThemePreset::TokyoNight);
+
+        // Enter completes onboarding while keeping selected theme
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
+        assert!(!app.onboarding_active);
+        assert_eq!(app.theme, ThemePreset::TokyoNight);
+
+        // Shift+T cycles theme directly
+        let key_shift_t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_shift_t, &adb_path, &tx);
+        assert_eq!(app.theme, ThemePreset::CatppuccinMocha);
     }
 }

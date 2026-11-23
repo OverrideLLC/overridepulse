@@ -7,10 +7,10 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::ui::theme::Theme;
 
 /// Renders the search/filter modal bar with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
     let search_area = centered_search_bar(65, 3, area);
 
     frame.render_widget(Clear, search_area);
@@ -21,11 +21,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .title(" Filter / Search ")
         .title_style(
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .border_style(Style::default().fg(Theme::ACCENT))
-        .style(Style::default().bg(Theme::BG_DARK));
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg_dark));
 
     let inner = block.inner(search_area);
     frame.render_widget(block, search_area);
@@ -34,14 +34,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled(
             "/ ",
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(&app.search_query, Style::default().fg(Theme::TEXT_PRIMARY)),
-        Span::styled("█", Style::default().fg(Theme::ACCENT)),
+        Span::styled(&app.search_query, Style::default().fg(theme.text_primary)),
+        Span::styled("█", Style::default().fg(theme.accent)),
         Span::styled(
             "  (Enter: Apply │ Esc: Cancel)",
-            Style::default().fg(Theme::TEXT_MUTED),
+            Style::default().fg(theme.text_muted),
         ),
     ]);
 
