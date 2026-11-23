@@ -7,10 +7,12 @@ use ratatui::{
 };
 
 use crate::app::AppState;
+use crate::i18n::ui_text;
 
 /// Renders the bottom footer bar with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -37,39 +39,39 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let shortcuts_line = if app.devices_view_active {
         Line::from(vec![
             Span::styled(" [d/Esc] ", key_style),
-            Span::styled("Back", desc_style),
+            Span::styled(txt.footer_back, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[Tab] ", key_style),
-            Span::styled("Switch Pane", desc_style),
+            Span::styled(txt.footer_switch_pane, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[w] ", key_style),
             Span::styled("Wi-Fi ADB", desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[Enter] ", key_style),
-            Span::styled("Select / Run", desc_style),
+            Span::styled(txt.footer_select_run, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[q] ", key_style),
-            Span::styled("Quit", desc_style),
+            Span::styled(txt.footer_quit, desc_style),
         ])
     } else {
         Line::from(vec![
             Span::styled(" [t] ", key_style),
-            Span::styled("Target", desc_style),
+            Span::styled(txt.footer_target, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[p] ", key_style),
-            Span::styled("Project", desc_style),
+            Span::styled(txt.footer_project, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[d] ", key_style),
-            Span::styled("Devices", desc_style),
+            Span::styled(txt.footer_devices, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[1/2/3] ", key_style),
-            Span::styled("Views", desc_style),
+            Span::styled(txt.footer_views, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[?] ", key_style),
-            Span::styled("Help", desc_style),
+            Span::styled(txt.footer_help, desc_style),
             Span::styled("  ", sep_style),
             Span::styled("[q] ", key_style),
-            Span::styled("Quit", desc_style),
+            Span::styled(txt.footer_quit, desc_style),
         ])
     };
 

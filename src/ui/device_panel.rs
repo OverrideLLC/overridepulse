@@ -8,15 +8,19 @@ use ratatui::{
 
 use crate::android::DeviceState;
 use crate::app::{AppState, Panel};
+use crate::i18n::ui_text;
 
 /// Renders the `[ Connected Devices ]` panel with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::Devices;
 
     let title = format!(
-        " Devices ({}) │ [w] Wi-Fi ADB │ [d/Esc] Back ",
-        app.devices.len()
+        " {} ({}) │ [w] Wi-Fi ADB │ [d/Esc] {} ",
+        txt.footer_devices,
+        app.devices.len(),
+        txt.footer_back
     );
     let block = Block::default()
         .borders(Borders::ALL)
@@ -28,7 +32,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     if app.devices.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
-            "  No devices · [w] Wi-Fi ADB",
+            txt.no_devices,
             Style::default().fg(theme.text_muted),
         )]));
         let list = List::new(vec![empty_item]).block(block);

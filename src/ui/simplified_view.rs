@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{AppState, Panel};
+use crate::i18n::ui_text;
 
 /// Formats the parity navigation bar showing which console panes are active:
 /// `[m] View │ [1] Simplified (ON/OFF) │ [2] Build (ON/OFF) │ [3] Logcat (ON/OFF)`
@@ -27,9 +28,10 @@ pub fn console_parity_bar(app: &AppState) -> String {
 /// live timer/progress only while active, and recent operation history.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::Console || app.current_panel == Panel::Output;
 
-    let title = " [1] Status │ [2] Build  [3] Logcat ";
+    let title = txt.status_tab_title;
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -84,7 +86,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             .unwrap_or("Running task...");
         let state_line = Line::from(vec![
             Span::styled(
-                format!("{spinner} Running: "),
+                format!("{spinner} {}", txt.running_prefix),
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
@@ -127,7 +129,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     } else {
         let state_line = if app.project_loading {
             Line::from(vec![Span::styled(
-                "⏳ Loading project…",
+                txt.loading_project,
                 Style::default()
                     .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
@@ -152,7 +154,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         } else {
             Line::from(vec![
                 Span::styled("● ", Style::default().fg(theme.success)),
-                Span::styled("Ready", Style::default().fg(theme.text_primary)),
+                Span::styled(txt.ready, Style::default().fg(theme.text_primary)),
             ])
         };
         frame.render_widget(Paragraph::new(state_line), status_area);
@@ -162,7 +164,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let visible_items = events_area.height as usize;
     if app.simplified_events.is_empty() {
         let empty_item = ListItem::new(Line::from(vec![Span::styled(
-            "  No operations yet · [b] build  [r] run  [t] target",
+            txt.no_operations,
             Style::default().fg(theme.text_muted),
         )]));
         frame.render_widget(List::new(vec![empty_item]), events_area);

@@ -5,28 +5,14 @@ use ratatui::{
     Frame,
 };
 
-use crate::android::QuickAction;
 use crate::app::{grid_cols_for_width, AppState, Panel};
+use crate::i18n::{localized_action_title, ui_text};
 use crate::ui::grid::{render_card_grid, GridCardItem};
-
-fn concise_action_title(action: QuickAction, app: &AppState) -> String {
-    let target = app.project.active_target();
-    match action {
-        QuickAction::BuildAndInstallDebug => "Build & Install".to_string(),
-        QuickAction::BuildAabAndDeploy => "Build AAB".to_string(),
-        QuickAction::ClearAppData => "Clear App Data".to_string(),
-        QuickAction::ForceStopApp => "Force Stop".to_string(),
-        QuickAction::RelaunchActivity => "Relaunch App".to_string(),
-        QuickAction::UninstallApp => "Uninstall App".to_string(),
-        QuickAction::LaunchScrcpy => "Scrcpy Mirror".to_string(),
-        QuickAction::StopGradleDaemons => "Stop Gradle".to_string(),
-        _ => action.title_for(target),
-    }
-}
 
 /// Renders the Actions panel as a responsive card grid.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::Actions;
     let active_target = app.project.active_target();
 
@@ -36,9 +22,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
                 || !target.platform.is_android()
                 || app.project.targets.len() > 1 =>
         {
-            format!(" Actions · {} ", target.display_label())
+            format!(" {} · {} ", txt.actions_title, target.display_label())
         }
-        _ => " Actions ".to_string(),
+        _ => format!(" {} ", txt.actions_title),
     };
 
     let block = Block::default()
@@ -57,7 +43,7 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .iter()
         .map(|action| GridCardItem {
             badge: action.shortcut().map(|c| format!("[{c}]")),
-            title: concise_action_title(*action, app),
+            title: localized_action_title(*action, active_target, app.language),
             subtitle: None,
         })
         .collect();

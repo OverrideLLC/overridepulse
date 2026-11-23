@@ -7,24 +7,28 @@ use ratatui::{
 };
 
 use crate::app::{AppState, Panel};
+use crate::i18n::ui_text;
 use crate::ui::theme::ThemePalette;
 
 /// Renders the `[ Build & Process Output ]` panel with rounded borders,
 /// dynamic Gradle progress bar, and syntax highlighting.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::Output || app.current_panel == Panel::Console;
 
     let follow_tag = if app.auto_scroll_console {
         ""
     } else {
-        " [Paused]"
+        txt.paused_tag
     };
 
     let title = format!(
-        " [2] Build ({}){} │ [Y] Copy ",
+        " [2] {} ({}){}{} ",
+        txt.build_tab_title,
         app.console_output.len(),
-        follow_tag
+        follow_tag,
+        txt.copy_hint
     );
 
     let block = Block::default()

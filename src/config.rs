@@ -1,6 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::i18n::Language;
 use crate::ui::theme::ThemePreset;
 
 /// Persistent user preferences stored under `~/.config/overridepulse/config`.
@@ -8,6 +9,7 @@ use crate::ui::theme::ThemePreset;
 pub struct UserConfig {
     pub onboarding_completed: bool,
     pub theme: ThemePreset,
+    pub language: Language,
 }
 
 impl UserConfig {
@@ -80,6 +82,11 @@ impl UserConfig {
                             cfg.theme = preset;
                         }
                     }
+                    "language" => {
+                        if let Some(lang) = Language::from_code(val) {
+                            cfg.language = lang;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -89,9 +96,10 @@ impl UserConfig {
 
     pub fn serialize(&self) -> String {
         format!(
-            "onboarding_completed = {}\ntheme = \"{}\"\n",
+            "onboarding_completed = {}\ntheme = \"{}\"\nlanguage = \"{}\"\n",
             self.onboarding_completed,
-            self.theme.id()
+            self.theme.id(),
+            self.language.code()
         )
     }
 }
@@ -331,6 +339,7 @@ mod tests {
         let cfg = UserConfig {
             onboarding_completed: true,
             theme: ThemePreset::TokyoNight,
+            language: Language::Es,
         };
         cfg.save_to(&cfg_path).unwrap();
 

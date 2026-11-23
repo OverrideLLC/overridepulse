@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
     let mut app = AppState::pending(root_path.clone());
     app.target_device_serial = cli.device.clone();
     app.set_theme(user_config.theme);
+    app.set_language(user_config.language);
     if cli.onboarding || !user_config.onboarding_completed {
         app.open_onboarding();
     }
@@ -520,6 +521,7 @@ fn persist_user_config(app: &AppState) {
         let cfg = UserConfig {
             onboarding_completed: true,
             theme: app.theme,
+            language: app.language,
         };
         let _ = cfg.save();
     }
@@ -539,15 +541,21 @@ fn handle_key_event(
         return;
     }
 
-    // Modal: First-run Onboarding & Theme Picker
+    // Modal: First-run Onboarding (Step 0: Language, Step 1: Visual Tour, Step 2: Theme)
     if app.onboarding_active {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             app.should_quit = true;
             return;
         }
-        if app.onboarding_step == 0 {
-            match key.code {
-                KeyCode::Enter | KeyCode::Right | KeyCode::Tab | KeyCode::Char(' ') => {
+        match app.onboarding_step {
+            0 => match key.code {
+                KeyCode::Up | KeyCode::Left | KeyCode::Char('k') => {
+                    app.prev_language();
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Char('j') => {
+                    app.next_language();
+                }
+                KeyCode::Enter | KeyCode::Tab | KeyCode::Char(' ') => {
                     app.onboarding_step = 1;
                 }
                 KeyCode::Esc => {
@@ -558,9 +566,33 @@ fn handle_key_event(
                     app.should_quit = true;
                 }
                 _ => {}
-            }
-        } else {
-            match key.code {
+            },
+            1 => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.prev_onboarding_tour();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.next_onboarding_tour();
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+                    app.cycle_onboarding_preview();
+                }
+                KeyCode::BackTab | KeyCode::Backspace => {
+                    app.onboarding_step = 0;
+                }
+                KeyCode::Enter | KeyCode::Tab => {
+                    app.onboarding_step = 2;
+                }
+                KeyCode::Esc => {
+                    app.complete_onboarding();
+                    persist_user_config(app);
+                }
+                KeyCode::Char('q') => {
+                    app.should_quit = true;
+                }
+                _ => {}
+            },
+            _ => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     app.prev_theme();
                 }
@@ -568,7 +600,7 @@ fn handle_key_event(
                     app.next_theme();
                 }
                 KeyCode::Left | KeyCode::BackTab | KeyCode::Backspace => {
-                    app.onboarding_step = 0;
+                    app.onboarding_step = 1;
                 }
                 KeyCode::Enter | KeyCode::Esc => {
                     app.complete_onboarding();
@@ -578,7 +610,7 @@ fn handle_key_event(
                     app.should_quit = true;
                 }
                 _ => {}
-            }
+            },
         }
         return;
     }
@@ -770,6 +802,11 @@ fn handle_key_event(
         // Theme cycle (Shift+T)
         KeyCode::Char('T') => {
             app.next_theme();
+            persist_user_config(app);
+        }
+        // Language toggle (Shift+L)
+        KeyCode::Char('L') => {
+            app.toggle_language();
             persist_user_config(app);
         }
         // Reopen onboarding & theme wizard (Shift+O)
@@ -1164,6 +1201,7 @@ mod tests {
 
     #[test]
     fn test_onboarding_flow_and_theme_selection() {
+        use overridepulse::i18n::Language;
         use overridepulse::ui::theme::ThemePreset;
 
         let mut app = AppState::new(PathBuf::from("."));
@@ -1171,30 +1209,51 @@ mod tests {
         app.open_onboarding();
         assert!(app.onboarding_active);
         assert_eq!(app.onboarding_step, 0);
+        assert_eq!(app.language, Language::En);
 
         let mut runner = ProcessRunner::new();
         let mut logcat = LogcatStream::new();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let adb_path = PathBuf::from("adb");
 
-        // Enter advances from Welcome (0) to Theme Picker (1)
+        // Step 0 (Language): Down selects Español live
+        let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_down, &adb_path, &tx);
+        assert_eq!(app.language, Language::Es);
+
+        // Enter advances from Language (0) to Visual Tour (1)
         let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
         assert_eq!(app.onboarding_step, 1);
 
+        // Down switches tour chapter, Space interacts with preview
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_down, &adb_path, &tx);
+        assert_eq!(app.onboarding_tour_index, 1);
+        let key_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_space, &adb_path, &tx);
+        assert_eq!(app.onboarding_preview_card, 1);
+
+        // Enter advances from Visual Tour (1) to Theme Picker (2)
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
+        assert_eq!(app.onboarding_step, 2);
+
         // Down previews the next theme live
-        let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_down, &adb_path, &tx);
         assert_eq!(app.theme, ThemePreset::TokyoNight);
 
-        // Enter completes onboarding while keeping selected theme
+        // Enter completes onboarding while keeping selected language & theme
         handle_key_event(&mut app, &mut runner, &mut logcat, key_enter, &adb_path, &tx);
         assert!(!app.onboarding_active);
+        assert_eq!(app.language, Language::Es);
         assert_eq!(app.theme, ThemePreset::TokyoNight);
 
-        // Shift+T cycles theme directly
+        // Shift+T cycles theme directly; Shift+L toggles language directly
         let key_shift_t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
         handle_key_event(&mut app, &mut runner, &mut logcat, key_shift_t, &adb_path, &tx);
         assert_eq!(app.theme, ThemePreset::CatppuccinMocha);
+
+        let key_shift_l = KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT);
+        handle_key_event(&mut app, &mut runner, &mut logcat, key_shift_l, &adb_path, &tx);
+        assert_eq!(app.language, Language::En);
     }
 }

@@ -8,18 +8,20 @@ use ratatui::{
 
 use crate::android::{LogEntry, LogLevel};
 use crate::app::{AppState, Panel};
+use crate::i18n::ui_text;
 use crate::ui::theme::ThemePalette;
 
 /// Renders the `[ Live Logcat ]` stream viewer with rounded borders,
 /// severity color coding, application filtering, and search highlights.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::Logcat || app.current_panel == Panel::Console;
 
     let app_filter_tag = if app.logcat_filter_by_app {
-        " [App]"
+        txt.scope_app
     } else {
-        " [All]"
+        txt.scope_all
     };
 
     let search_tag = if !app.search_query.is_empty() {
@@ -31,15 +33,17 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let follow_tag = if app.auto_scroll_logcat {
         ""
     } else {
-        " [Paused]"
+        txt.paused_tag
     };
 
     let title = format!(
-        " [3] Logcat ({}){}{}{} │ [f] Scope [y] Copy ",
+        " [3] {} ({}){}{}{}{} ",
+        txt.logcat_tab_title,
         app.logcat_entries.len(),
         app_filter_tag,
         search_tag,
-        follow_tag
+        follow_tag,
+        txt.scope_copy_hint
     );
 
     let block = Block::default()

@@ -142,7 +142,7 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     } else if app.adb_connect_modal_active {
         components::adb_connect_modal::render(frame, app, size);
     } else if app.help_active {
-        components::help::render(frame, size, app.palette());
+        components::help::render(frame, size, app.palette(), app.language);
     } else if app.search_active {
         components::search::render(frame, app, size);
     }
@@ -339,15 +339,26 @@ mod tests {
 
     #[test]
     fn test_render_onboarding_steps() {
-        let backend = TestBackend::new(120, 35);
+        let backend = TestBackend::new(120, 36);
         let mut terminal = Terminal::new(backend).unwrap();
 
         let mut app = AppState::new(PathBuf::from("."));
         app.project_selector_active = false;
         app.open_onboarding();
+        // Step 0: Language
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+        app.next_language();
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
 
+        // Step 1: Visual Tour (all 4 component previews)
         app.onboarding_step = 1;
+        for idx in 0..4 {
+            app.onboarding_tour_index = idx;
+            assert!(terminal.draw(|f| render(f, &app)).is_ok());
+        }
+
+        // Step 2: Theme Picker
+        app.onboarding_step = 2;
         app.next_theme();
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
     }

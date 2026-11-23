@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::android::{AndroidProject, Device, DeviceAction, LogEntry, QuickAction};
+use crate::i18n::{ui_text, Language};
 use crate::ui::theme::{ThemePalette, ThemePreset};
 
 pub const DEFAULT_MAX_BUFFER_LINES: usize = 2000;
@@ -132,8 +133,12 @@ pub struct AppState {
     pub help_active: bool,
 
     pub theme: ThemePreset,
+    pub language: Language,
+    pub selected_language_index: usize,
     pub onboarding_active: bool,
     pub onboarding_step: usize,
+    pub onboarding_tour_index: usize,
+    pub onboarding_preview_card: usize,
     pub selected_theme_index: usize,
 
     pub console_output: VecDeque<String>,
@@ -217,8 +222,12 @@ impl AppState {
             search_query: String::new(),
             help_active: false,
             theme: ThemePreset::default(),
+            language: Language::default(),
+            selected_language_index: 0,
             onboarding_active: false,
             onboarding_step: 0,
+            onboarding_tour_index: 0,
+            onboarding_preview_card: 0,
             selected_theme_index: 0,
             console_output: VecDeque::with_capacity(DEFAULT_MAX_BUFFER_LINES),
             max_console_lines: DEFAULT_MAX_BUFFER_LINES,
@@ -250,13 +259,70 @@ impl AppState {
             .unwrap_or(0);
     }
 
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+        self.selected_language_index = Language::all()
+            .iter()
+            .position(|l| *l == language)
+            .unwrap_or(0);
+    }
+
+    pub fn next_language(&mut self) {
+        let langs = Language::all();
+        if !langs.is_empty() {
+            self.selected_language_index = (self.selected_language_index + 1) % langs.len();
+            self.language = langs[self.selected_language_index];
+            self.status_message = Some(format!("Language: {}", self.language.name()));
+        }
+    }
+
+    pub fn prev_language(&mut self) {
+        let langs = Language::all();
+        if !langs.is_empty() {
+            if self.selected_language_index == 0 {
+                self.selected_language_index = langs.len() - 1;
+            } else {
+                self.selected_language_index -= 1;
+            }
+            self.language = langs[self.selected_language_index];
+            self.status_message = Some(format!("Language: {}", self.language.name()));
+        }
+    }
+
+    pub fn toggle_language(&mut self) {
+        self.set_language(self.language.toggle());
+        let label = match self.language {
+            Language::En => "Language: English",
+            Language::Es => "Idioma: Español",
+        };
+        self.status_message = Some(label.to_string());
+    }
+
     pub fn open_onboarding(&mut self) {
         self.onboarding_active = true;
         self.onboarding_step = 0;
-        self.selected_theme_index = ThemePreset::all()
-            .iter()
-            .position(|t| *t == self.theme)
-            .unwrap_or(0);
+        self.onboarding_tour_index = 0;
+        self.onboarding_preview_card = 0;
+        self.set_theme(self.theme);
+        self.set_language(self.language);
+    }
+
+    pub fn next_onboarding_tour(&mut self) {
+        self.onboarding_tour_index = (self.onboarding_tour_index + 1) % 4;
+        self.onboarding_preview_card = 0;
+    }
+
+    pub fn prev_onboarding_tour(&mut self) {
+        self.onboarding_tour_index = if self.onboarding_tour_index == 0 {
+            3
+        } else {
+            self.onboarding_tour_index - 1
+        };
+        self.onboarding_preview_card = 0;
+    }
+
+    pub fn cycle_onboarding_preview(&mut self) {
+        self.onboarding_preview_card = (self.onboarding_preview_card + 1) % 4;
     }
 
     pub fn next_theme(&mut self) {
@@ -284,7 +350,12 @@ impl AppState {
     pub fn complete_onboarding(&mut self) {
         self.onboarding_active = false;
         self.onboarding_step = 0;
-        self.status_message = Some(format!("Ready · Theme: {}", self.theme.name()));
+        let ready = ui_text(self.language).ready;
+        self.status_message = Some(format!(
+            "{ready} · {} · {}",
+            self.language.name(),
+            self.theme.name()
+        ));
     }
 
     pub fn selected_device(&self) -> Option<&Device> {

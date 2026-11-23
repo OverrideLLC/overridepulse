@@ -7,6 +7,7 @@ use ratatui::{
 
 use crate::android::DeviceAction;
 use crate::app::{grid_cols_for_width, AppState, Panel};
+use crate::i18n::{localized_device_action_title, ui_text};
 use crate::ui::grid::{render_card_grid, GridCardItem};
 
 fn device_action_icon(action: DeviceAction) -> &'static str {
@@ -27,12 +28,13 @@ fn device_action_icon(action: DeviceAction) -> &'static str {
 /// Renders the `[ Device Controls (ADB) ]` panel as a compact card grid.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
+    let txt = ui_text(app.language);
     let is_focused = app.current_panel == Panel::DeviceControls;
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Device Controls (ADB) ")
+        .title(txt.devices_view_controls_title)
         .title_style(theme.title_style(is_focused))
         .border_style(theme.border_style(is_focused))
         .style(Style::default().bg(theme.bg_dark));
@@ -45,9 +47,9 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         .iter()
         .map(|action| GridCardItem {
             badge: Some(device_action_icon(*action).to_string()),
-            title: action.title().to_string(),
+            title: localized_device_action_title(*action, app.language).to_string(),
             subtitle: (*action == DeviceAction::WirelessPairAndConnect)
-                .then(|| "[w] shortcut".to_string()),
+                .then(|| "[w]".to_string()),
         })
         .collect();
 
