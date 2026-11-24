@@ -6,12 +6,17 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, ClickTarget};
 
 /// Renders the search/filter modal bar with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
     let search_area = centered_search_bar(65, 3, area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::DismissModal);
+        hit_map.push(search_area, ClickTarget::ModalBody);
+    }
 
     frame.render_widget(Clear, search_area);
 

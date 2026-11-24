@@ -61,8 +61,8 @@ impl EventHandler {
         let event_sender = sender.clone();
         let _event_thread = std::thread::spawn(move || {
             loop {
-                // Poll with a short timeout to prevent high CPU usage and allow responsive shutdown
-                match event::poll(Duration::from_millis(50)) {
+                // Poll with a 100ms timeout to keep idle CPU low while returning immediately on input
+                match event::poll(Duration::from_millis(100)) {
                     Ok(true) => match event::read() {
                         Ok(crossterm_event) => {
                             let app_event = match crossterm_event {
@@ -113,5 +113,10 @@ impl EventHandler {
     /// Asynchronously receives the next event from the queue.
     pub async fn next(&mut self) -> Option<AppEvent> {
         self.receiver.recv().await
+    }
+
+    /// Non-blocking dequeue used to coalesce bursts of events before a redraw.
+    pub fn try_next(&mut self) -> Option<AppEvent> {
+        self.receiver.try_recv().ok()
     }
 }

@@ -6,12 +6,19 @@ use ratatui::{
     Frame,
 };
 
+use crate::app::{AppState, ClickTarget};
 use crate::i18n::Language;
-use crate::ui::theme::ThemePalette;
 
 /// Renders the help overlay modal with rounded borders and comprehensive keybindings.
-pub fn render(frame: &mut Frame, area: Rect, theme: ThemePalette, lang: Language) {
+pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
+    let theme = app.palette();
+    let lang = app.language;
     let popup_area = centered_rect(68, 84, area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::DismissModal);
+        hit_map.push(popup_area, ClickTarget::ModalBody);
+    }
 
     // Clear background behind popup
     frame.render_widget(Clear, popup_area);
@@ -63,6 +70,10 @@ pub fn render(frame: &mut Frame, area: Rect, theme: ThemePalette, lang: Language
             Line::from(vec![
                 Span::styled("  d                 ", key_style),
                 Span::raw("Open / close separate Devices & ADB Controls view"),
+            ]),
+            Line::from(vec![
+                Span::styled("  s / ,             ", key_style),
+                Span::raw("Open / close full Settings view (Themes, Language, ADB, About)"),
             ]),
             Line::from(vec![
                 Span::styled("  w                 ", key_style),
@@ -157,6 +168,10 @@ pub fn render(frame: &mut Frame, area: Rect, theme: ThemePalette, lang: Language
             Line::from(vec![
                 Span::styled("  d                 ", key_style),
                 Span::raw("Abrir / cerrar vista dedicada de Dispositivos y Controles ADB"),
+            ]),
+            Line::from(vec![
+                Span::styled("  s / ,             ", key_style),
+                Span::raw("Abrir / cerrar vista completa de Ajustes (Tema, Idioma, ADB, Info)"),
             ]),
             Line::from(vec![
                 Span::styled("  w                 ", key_style),

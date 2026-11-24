@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::android::DeviceState;
-use crate::app::{AppState, Panel};
+use crate::app::{AppState, ClickTarget, Panel};
 use crate::i18n::ui_text;
 
 /// Renders the `[ Connected Devices ]` panel with rounded borders.
@@ -152,6 +152,27 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             }
         })
         .collect();
+
+    let inner = block.inner(area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::FocusPanel(Panel::Devices));
+        hit_map.push_scroll(area, ClickTarget::ScrollArea(Panel::Devices));
+        for idx in 0..app.devices.len() {
+            let y = inner.y + idx as u16;
+            if y < inner.bottom() {
+                hit_map.push(
+                    Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                    ClickTarget::DeviceRow(idx),
+                );
+            }
+        }
+    }
 
     let list = List::new(items).block(block);
     frame.render_widget(list, area);

@@ -10,6 +10,7 @@ pub struct UserConfig {
     pub onboarding_completed: bool,
     pub theme: ThemePreset,
     pub language: Language,
+    pub custom_adb_path: Option<String>,
 }
 
 impl UserConfig {
@@ -87,6 +88,9 @@ impl UserConfig {
                             cfg.language = lang;
                         }
                     }
+                    "adb_path" if !val.is_empty() => {
+                        cfg.custom_adb_path = Some(val.to_string());
+                    }
                     _ => {}
                 }
             }
@@ -95,12 +99,19 @@ impl UserConfig {
     }
 
     pub fn serialize(&self) -> String {
-        format!(
+        let mut out = format!(
             "onboarding_completed = {}\ntheme = \"{}\"\nlanguage = \"{}\"\n",
             self.onboarding_completed,
             self.theme.id(),
             self.language.code()
-        )
+        );
+        if let Some(ref adb) = self.custom_adb_path {
+            let trimmed = adb.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("adb_path = \"{trimmed}\"\n"));
+            }
+        }
+        out
     }
 }
 
@@ -273,6 +284,25 @@ impl SdkConfig {
         self.adb_path.is_some()
     }
 
+    /// Resolves the effective ADB executable path, preferring an explicit custom override.
+    pub fn effective_adb_path(&self, custom_adb_path: Option<&str>) -> PathBuf {
+        if let Some(custom) = custom_adb_path.map(str::trim).filter(|s| !s.is_empty()) {
+            return PathBuf::from(custom);
+        }
+        self.adb_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(exe_name("adb")))
+    }
+
+    /// Checks whether the given ADB path exists on disk or resolves via `PATH`.
+    pub fn is_adb_path_reachable(path: &Path) -> bool {
+        if path.components().count() > 1 {
+            return path.is_file();
+        }
+        let name = path.to_string_lossy();
+        Self::find_in_path(&name).is_some()
+    }
+
     pub fn is_bundletool_available(&self) -> bool {
         self.bundletool_path.is_some()
     }
@@ -340,6 +370,7 @@ mod tests {
             onboarding_completed: true,
             theme: ThemePreset::TokyoNight,
             language: Language::Es,
+            custom_adb_path: Some("/opt/android-sdk/platform-tools/adb".to_string()),
         };
         cfg.save_to(&cfg_path).unwrap();
 

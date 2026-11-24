@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, Panel};
+use crate::app::{AppState, ClickTarget, Panel};
 use crate::i18n::ui_text;
 
 /// Formats the parity navigation bar showing which console panes are active:
@@ -29,7 +29,7 @@ pub fn console_parity_bar(app: &AppState) -> String {
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
     let txt = ui_text(app.language);
-    let is_focused = app.current_panel == Panel::Console || app.current_panel == Panel::Output;
+    let is_focused = app.current_panel == Panel::Console;
 
     let title = txt.status_tab_title;
 
@@ -43,6 +43,46 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // Make [2] Build and [3] Logcat tabs in the top border clickable to toggle panes with mouse.
+    if area.height >= 1 && area.width > 12 {
+        let mut hit_map = app.hit_map.borrow_mut();
+        if let Some(byte_idx2) = title.find("[2]") {
+            let char_x2 = title[..byte_idx2].chars().count() as u16 + 1;
+            let byte_idx3 = title.find("[3]");
+            let end_x2 = byte_idx3
+                .map(|b| title[..b].chars().count() as u16 + 1)
+                .unwrap_or(title.chars().count() as u16 + 1);
+            if area.x + char_x2 < area.right() {
+                hit_map.push(
+                    Rect {
+                        x: area.x + char_x2,
+                        y: area.y,
+                        width: end_x2.saturating_sub(char_x2).min(area.right() - (area.x + char_x2)),
+                        height: 1,
+                    },
+                    ClickTarget::ToggleBuildPane,
+                );
+            }
+        }
+        if let Some(byte_idx3) = title.find("[3]") {
+            let char_x3 = title[..byte_idx3].chars().count() as u16 + 1;
+            let total_chars = title.chars().count() as u16 + 1;
+            if area.x + char_x3 < area.right() {
+                hit_map.push(
+                    Rect {
+                        x: area.x + char_x3,
+                        y: area.y,
+                        width: total_chars
+                            .saturating_sub(char_x3)
+                            .min(area.right() - (area.x + char_x3)),
+                        height: 1,
+                    },
+                    ClickTarget::ToggleLogcatPane,
+                );
+            }
+        }
+    }
 
     if inner.height < 3 || inner.width < 10 {
         return;

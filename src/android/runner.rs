@@ -403,6 +403,42 @@ pub fn find_latest_aab(search_dir: &Path, variant: Option<&str>) -> Option<PathB
     find_latest_artifact(search_dir, "aab", variant)
 }
 
+/// Resolves the active module's build outputs directory (or module directory) from `ActionContext`
+/// so APK/AAB discovery does not walk unrelated modules first.
+fn resolve_module_search_dir(ctx: &ActionContext) -> Option<PathBuf> {
+    let raw_module = ctx
+        .module
+        .as_deref()
+        .or_else(|| ctx.target.as_ref().map(|t| t.module.as_str()))?;
+    let trimmed = raw_module.trim().trim_start_matches(':');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut module_dir = ctx.project_root.clone();
+    for segment in trimmed.split(':').filter(|s| !s.is_empty()) {
+        module_dir.push(segment);
+    }
+
+    let outputs_dir = module_dir.join("build").join("outputs");
+    if outputs_dir.is_dir() {
+        Some(outputs_dir)
+    } else if module_dir.is_dir() {
+        Some(module_dir)
+    } else {
+        None
+    }
+}
+
+fn find_latest_ctx_artifact(ctx: &ActionContext, extension: &str) -> Option<PathBuf> {
+    if let Some(module_dir) = resolve_module_search_dir(ctx) {
+        if let Some(found) = find_latest_artifact(&module_dir, extension, Some(&ctx.variant)) {
+            return Some(found);
+        }
+    }
+    find_latest_artifact(&ctx.project_root, extension, Some(&ctx.variant))
+}
+
 fn find_latest_artifact(
     search_dir: &Path,
     extension: &str,
@@ -863,6 +899,56 @@ impl ProcessRunner {
 
         self.abort_handle = Some(join_handle.abort_handle());
     }
+
+    /// Restarts the ADB server (`adb kill-server` followed by `adb start-server`).
+    pub fn execute_adb_restart_server(
+        &mut self,
+        adb_path: PathBuf,
+        sender: UnboundedSender<AppEvent>,
+    ) {
+        self.abort();
+
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        self.cancel_tx = Some(cancel_tx);
+
+        let join_handle = tokio::spawn(async move {
+            let mut cancel_opt = Some(cancel_rx);
+            let _ = sender.send(AppEvent::ProcessOutput(format!(
+                "Restarting ADB server using {}...",
+                adb_path.display()
+            )));
+
+            let mut kill_cmd = Command::new(&adb_path);
+            kill_cmd.arg("kill-server");
+            let _ = run_streaming_cmd(kill_cmd, "adb kill-server", &sender, &mut cancel_opt).await;
+
+            let mut start_cmd = Command::new(&adb_path);
+            start_cmd.arg("start-server");
+            match run_streaming_cmd(start_cmd, "adb start-server", &sender, &mut cancel_opt).await
+            {
+                Ok(true) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        true,
+                        "ADB server restarted successfully".to_string(),
+                    ));
+                }
+                Ok(false) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        "Failed to start ADB server".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    let _ = sender.send(AppEvent::ProcessFinished(
+                        false,
+                        format!("ADB restart error: {e}"),
+                    ));
+                }
+            }
+        });
+
+        self.abort_handle = Some(join_handle.abort_handle());
+    }
 }
 
 impl Drop for ProcessRunner {
@@ -1304,7 +1390,7 @@ async fn execute_build_and_install_debug(
         }
     }
 
-    let apk_path = match find_latest_apk(&ctx.project_root, Some(&ctx.variant)) {
+    let apk_path = match find_latest_ctx_artifact(ctx, "apk") {
         Some(path) => path,
         None => {
             let _ = sender.send(AppEvent::ProcessOutput(
@@ -1482,7 +1568,7 @@ async fn execute_build_aab_and_deploy(
         }
     }
 
-    let aab_path = match find_latest_aab(&ctx.project_root, Some(&ctx.variant)) {
+    let aab_path = match find_latest_ctx_artifact(ctx, "aab") {
         Some(path) => path,
         None => {
             let _ = sender.send(AppEvent::ProcessOutput(
@@ -2504,5 +2590,39 @@ mod tests {
         assert!(!QuickAction::KmpRunTarget.requires_adb_device());
         assert!(!QuickAction::StopGradleDaemons.requires_adb_device());
         assert!(QuickAction::BuildAndInstallDebug.requires_adb_device());
+    }
+
+    #[test]
+    fn test_find_latest_apk_prefers_active_module() {
+        let temp_root = std::env::temp_dir().join("overridepulse_test_active_module_apk");
+        let _ = std::fs::remove_dir_all(&temp_root);
+
+        let app_debug_dir = temp_root.join("composeApp/build/outputs/apk/debug");
+        let other_debug_dir = temp_root.join("otherApp/build/outputs/apk/debug");
+        std::fs::create_dir_all(&app_debug_dir).unwrap();
+        std::fs::create_dir_all(&other_debug_dir).unwrap();
+
+        let target_apk = app_debug_dir.join("composeApp-debug.apk");
+        let other_apk = other_debug_dir.join("otherApp-debug.apk");
+        std::fs::write(&target_apk, b"target").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Even if another module has a newer APK, the active module's output wins first.
+        std::fs::write(&other_apk, b"other").unwrap();
+
+        let ctx = ActionContext::new(&temp_root, "emulator-5554")
+            .with_variant("debug")
+            .with_module(":composeApp");
+
+        let found = find_latest_ctx_artifact(&ctx, "apk");
+        assert_eq!(found.as_deref(), Some(target_apk.as_path()));
+
+        // Without an active module match, falls back to scanning project root.
+        let fallback_ctx = ActionContext::new(&temp_root, "emulator-5554")
+            .with_variant("debug")
+            .with_module(":missingModule");
+        let fallback_found = find_latest_ctx_artifact(&fallback_ctx, "apk");
+        assert_eq!(fallback_found.as_deref(), Some(other_apk.as_path()));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

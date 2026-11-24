@@ -1,7 +1,11 @@
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use ratatui::layout::Rect;
+
 use crate::android::{AndroidProject, Device, DeviceAction, LogEntry, QuickAction};
+use crate::config::SdkConfig;
 use crate::i18n::{ui_text, Language};
 use crate::ui::theme::{ThemePalette, ThemePreset};
 
@@ -38,6 +42,173 @@ impl Panel {
 pub enum ViewMode {
     BuildOutput,
     LogcatView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsSection {
+    #[default]
+    Appearance,
+    AdbSdk,
+    ConsoleLogcat,
+    About,
+}
+
+impl SettingsSection {
+    pub fn all() -> &'static [SettingsSection] {
+        &[
+            Self::Appearance,
+            Self::AdbSdk,
+            Self::ConsoleLogcat,
+            Self::About,
+        ]
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Appearance => "🎨",
+            Self::AdbSdk => "🔌",
+            Self::ConsoleLogcat => "📋",
+            Self::About => "⚡",
+        }
+    }
+
+    pub fn label(&self, lang: Language) -> &'static str {
+        match (lang, self) {
+            (Language::En, Self::Appearance) => "Appearance & Language",
+            (Language::Es, Self::Appearance) => "Apariencia e Idioma",
+            (Language::En, Self::AdbSdk) => "ADB & Android SDK",
+            (Language::Es, Self::AdbSdk) => "ADB y Android SDK",
+            (Language::En, Self::ConsoleLogcat) => "Console & Logcat",
+            (Language::Es, Self::ConsoleLogcat) => "Consola y Logcat",
+            (Language::En, Self::About) => "About & App Info",
+            (Language::Es, Self::About) => "Acerca de la App",
+        }
+    }
+
+    pub fn description(&self, lang: Language) -> &'static str {
+        match (lang, self) {
+            (Language::En, Self::Appearance) => "Color themes & interface language",
+            (Language::Es, Self::Appearance) => "Paletas de color e idioma",
+            (Language::En, Self::AdbSdk) => "ADB binary path, SDK tools & server",
+            (Language::Es, Self::AdbSdk) => "Ruta de ADB, herramientas SDK y servidor",
+            (Language::En, Self::ConsoleLogcat) => "Panes, logcat scope & visual tour",
+            (Language::Es, Self::ConsoleLogcat) => "Paneles, filtro de logcat y tour",
+            (Language::En, Self::About) => "Version, config file & workspace",
+            (Language::Es, Self::About) => "Versión, config y proyecto activo",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsFocus {
+    #[default]
+    Sidebar,
+    Content,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FooterAction {
+    Back,
+    Settings,
+    Devices,
+    Project,
+    Target,
+    CycleViews,
+    Help,
+    Quit,
+    WifiAdb,
+    SwitchPane,
+    SelectOrApply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickTarget {
+    ActionCard(usize),
+    DeviceControlCard(usize),
+    DeviceRow(usize),
+    FocusPanel(Panel),
+    ScrollArea(Panel),
+    ToggleSimplifiedPane,
+    ToggleBuildPane,
+    ToggleLogcatPane,
+    CopyBuild,
+    ToggleBuildFollow,
+    ClearBuild,
+    ToggleMaximizeBuild,
+    CopyLogcat,
+    ToggleLogcatScope,
+    OpenLogcatSearch,
+    ClearLogcatSearch,
+    ToggleLogcatFollow,
+    ClearLogcat,
+    ToggleMaximizeLogcat,
+    SettingsSection(SettingsSection),
+    SettingsItem(usize),
+    Footer(FooterAction),
+    ProjectRow(usize),
+    AdbModalField(usize),
+    AdbModalSubmit,
+    AdbModalCancel,
+    OnboardingLanguage(usize),
+    OnboardingTourChapter(usize),
+    OnboardingPreview,
+    OnboardingTheme(usize),
+    OnboardingNext,
+    OnboardingBack,
+    OnboardingSkip,
+    ModalBody,
+    DismissModal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitRegion {
+    pub area: Rect,
+    pub target: ClickTarget,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UiHitMap {
+    pub regions: Vec<HitRegion>,
+    pub scroll_regions: Vec<HitRegion>,
+}
+
+impl UiHitMap {
+    pub fn clear(&mut self) {
+        self.regions.clear();
+        self.scroll_regions.clear();
+    }
+
+    pub fn push(&mut self, area: Rect, target: ClickTarget) {
+        if area.width > 0 && area.height > 0 {
+            self.regions.push(HitRegion { area, target });
+        }
+    }
+
+    pub fn push_scroll(&mut self, area: Rect, target: ClickTarget) {
+        if area.width > 0 && area.height > 0 {
+            self.scroll_regions.push(HitRegion { area, target });
+        }
+    }
+
+    pub fn hit_test(&self, col: u16, row: u16) -> Option<ClickTarget> {
+        self.regions.iter().rev().find_map(|r| {
+            let inside = col >= r.area.x
+                && col < r.area.x.saturating_add(r.area.width)
+                && row >= r.area.y
+                && row < r.area.y.saturating_add(r.area.height);
+            inside.then_some(r.target)
+        })
+    }
+
+    pub fn scroll_test(&self, col: u16, row: u16) -> Option<ClickTarget> {
+        self.scroll_regions.iter().rev().find_map(|r| {
+            let inside = col >= r.area.x
+                && col < r.area.x.saturating_add(r.area.width)
+                && row >= r.area.y
+                && row < r.area.y.saturating_add(r.area.height);
+            inside.then_some(r.target)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -119,6 +290,15 @@ pub struct AppState {
     pub adb_modal_field_index: usize,
 
     pub devices_view_active: bool,
+    pub settings_view_active: bool,
+    pub settings_section: SettingsSection,
+    pub settings_focus: SettingsFocus,
+    pub settings_item_index: usize,
+    pub settings_editing_adb_path: bool,
+    pub settings_adb_input: String,
+    pub custom_adb_path: Option<String>,
+    pub sdk_config: SdkConfig,
+    pub adb_path: PathBuf,
     pub show_simplified_pane: bool,
     pub show_build_pane: bool,
     pub show_logcat_pane: bool,
@@ -158,8 +338,13 @@ pub struct AppState {
 
     pub console_scroll: usize,
     pub logcat_scroll: usize,
+    pub console_visible_height: Cell<usize>,
+    pub logcat_visible_height: Cell<usize>,
     pub auto_scroll_console: bool,
     pub auto_scroll_logcat: bool,
+    pub saved_panes_before_maximize: Option<(bool, bool, bool)>,
+
+    pub hit_map: RefCell<UiHitMap>,
 
     pub should_quit: bool,
 }
@@ -211,6 +396,15 @@ impl AppState {
             adb_connect_ip_port: "192.168.1.50:5555".to_string(),
             adb_modal_field_index: 0,
             devices_view_active: false,
+            settings_view_active: false,
+            settings_section: SettingsSection::default(),
+            settings_focus: SettingsFocus::default(),
+            settings_item_index: 0,
+            settings_editing_adb_path: false,
+            settings_adb_input: String::new(),
+            custom_adb_path: None,
+            sdk_config: SdkConfig::default(),
+            adb_path: PathBuf::from("adb"),
             show_simplified_pane: true,
             show_build_pane: false,
             show_logcat_pane: false,
@@ -241,8 +435,12 @@ impl AppState {
             terminal_width: 120,
             console_scroll: 0,
             logcat_scroll: 0,
+            console_visible_height: Cell::new(12),
+            logcat_visible_height: Cell::new(12),
             auto_scroll_console: true,
             auto_scroll_logcat: true,
+            saved_panes_before_maximize: None,
+            hit_map: RefCell::new(UiHitMap::default()),
             should_quit: false,
         }
     }
@@ -476,6 +674,23 @@ impl AppState {
         } else if self.show_logcat_pane && !self.show_build_pane {
             self.view_mode = ViewMode::LogcatView;
         }
+        let invalid_focus = match self.current_panel {
+            Panel::Console => !self.show_simplified_pane,
+            Panel::Output => !self.show_build_pane,
+            Panel::Logcat => !self.show_logcat_pane,
+            _ => false,
+        };
+        if invalid_focus {
+            self.current_panel = if self.show_logcat_pane {
+                Panel::Logcat
+            } else if self.show_build_pane {
+                Panel::Output
+            } else if self.show_simplified_pane {
+                Panel::Console
+            } else {
+                Panel::Actions
+            };
+        }
     }
 
     pub fn append_simplified_event(&mut self, event: impl Into<String>) {
@@ -544,12 +759,102 @@ impl AppState {
     pub fn toggle_devices_view(&mut self) {
         self.devices_view_active = !self.devices_view_active;
         if self.devices_view_active {
+            self.settings_view_active = false;
+            self.settings_editing_adb_path = false;
             self.current_panel = Panel::Devices;
             self.status_message = Some("Devices & ADB view".to_string());
         } else {
             self.current_panel = Panel::Actions;
             self.status_message = Some("Ready".to_string());
         }
+    }
+
+    pub fn toggle_settings_view(&mut self) {
+        self.settings_view_active = !self.settings_view_active;
+        self.settings_editing_adb_path = false;
+        if self.settings_view_active {
+            self.devices_view_active = false;
+            self.settings_adb_input = self.custom_adb_path.clone().unwrap_or_default();
+            self.status_message = Some(match self.language {
+                Language::En => "Settings".to_string(),
+                Language::Es => "Ajustes".to_string(),
+            });
+        } else {
+            self.current_panel = Panel::Actions;
+            self.status_message = Some(ui_text(self.language).ready.to_string());
+        }
+    }
+
+    pub fn settings_next_section(&mut self) {
+        let sections = SettingsSection::all();
+        let idx = sections
+            .iter()
+            .position(|s| *s == self.settings_section)
+            .unwrap_or(0);
+        self.settings_section = sections[(idx + 1) % sections.len()];
+        self.settings_item_index = 0;
+        self.settings_editing_adb_path = false;
+    }
+
+    pub fn settings_prev_section(&mut self) {
+        let sections = SettingsSection::all();
+        let idx = sections
+            .iter()
+            .position(|s| *s == self.settings_section)
+            .unwrap_or(0);
+        let prev = if idx == 0 {
+            sections.len() - 1
+        } else {
+            idx - 1
+        };
+        self.settings_section = sections[prev];
+        self.settings_item_index = 0;
+        self.settings_editing_adb_path = false;
+    }
+
+    pub fn settings_item_count(&self) -> usize {
+        match self.settings_section {
+            SettingsSection::Appearance => ThemePreset::all().len() + Language::all().len(),
+            SettingsSection::AdbSdk => 5,
+            SettingsSection::ConsoleLogcat => 6,
+            SettingsSection::About => 2,
+        }
+    }
+
+    pub fn settings_next_item(&mut self) {
+        let count = self.settings_item_count();
+        if count > 0 {
+            self.settings_item_index = (self.settings_item_index + 1) % count;
+        }
+    }
+
+    pub fn settings_prev_item(&mut self) {
+        let count = self.settings_item_count();
+        if count > 0 {
+            if self.settings_item_index == 0 {
+                self.settings_item_index = count - 1;
+            } else {
+                self.settings_item_index -= 1;
+            }
+        }
+    }
+
+    pub fn refresh_sdk_config(&mut self) {
+        self.sdk_config = SdkConfig::detect();
+        self.adb_path = self
+            .sdk_config
+            .effective_adb_path(self.custom_adb_path.as_deref());
+    }
+
+    pub fn apply_custom_adb_path(&mut self, custom: Option<String>) {
+        let normalized = custom
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        self.custom_adb_path = normalized;
+        self.settings_adb_input = self.custom_adb_path.clone().unwrap_or_default();
+        self.adb_path = self
+            .sdk_config
+            .effective_adb_path(self.custom_adb_path.as_deref());
     }
 
     pub fn next_target(&mut self) {
@@ -733,29 +1038,150 @@ impl AppState {
         if self.devices_view_active {
             vec![Panel::Devices, Panel::DeviceControls]
         } else {
-            vec![Panel::Actions, Panel::Console]
+            let mut panels = vec![Panel::Actions];
+            if self.show_simplified_pane {
+                panels.push(Panel::Console);
+            }
+            if self.show_build_pane {
+                panels.push(Panel::Output);
+            }
+            if self.show_logcat_pane {
+                panels.push(Panel::Logcat);
+            }
+            if panels.len() == 1 {
+                panels.push(Panel::Console);
+            }
+            panels
         }
     }
 
     pub fn next_panel(&mut self) {
         let panels = self.visible_panels();
-        let normalized = match self.current_panel {
-            Panel::Output | Panel::Logcat => Panel::Console,
-            other => other,
-        };
-        let idx = panels.iter().position(|p| *p == normalized).unwrap_or(0);
+        let idx = panels
+            .iter()
+            .position(|p| *p == self.current_panel)
+            .unwrap_or(0);
         self.current_panel = panels[(idx + 1) % panels.len()];
     }
 
     pub fn prev_panel(&mut self) {
         let panels = self.visible_panels();
-        let normalized = match self.current_panel {
-            Panel::Output | Panel::Logcat => Panel::Console,
-            other => other,
-        };
-        let idx = panels.iter().position(|p| *p == normalized).unwrap_or(0);
+        let idx = panels
+            .iter()
+            .position(|p| *p == self.current_panel)
+            .unwrap_or(0);
         let prev = if idx == 0 { panels.len() - 1 } else { idx - 1 };
         self.current_panel = panels[prev];
+    }
+
+    pub fn effective_logcat_len(&self) -> usize {
+        let q = self.search_query.trim();
+        if q.is_empty() {
+            self.logcat_entries.len()
+        } else {
+            self.logcat_entries
+                .iter()
+                .filter(|e| e.matches_filter(q, None, None, None))
+                .count()
+        }
+    }
+
+    pub fn scroll_console_up(&mut self, lines: usize) {
+        let vis = self.console_visible_height.get().max(1);
+        let max_scroll = self.console_output.len().saturating_sub(vis);
+        if self.auto_scroll_console {
+            self.console_scroll = max_scroll;
+            self.auto_scroll_console = false;
+        }
+        self.console_scroll = self.console_scroll.min(max_scroll).saturating_sub(lines);
+    }
+
+    pub fn scroll_console_down(&mut self, lines: usize) {
+        let vis = self.console_visible_height.get().max(1);
+        let max_scroll = self.console_output.len().saturating_sub(vis);
+        self.console_scroll = self.console_scroll.saturating_add(lines).min(max_scroll);
+        if self.console_scroll >= max_scroll {
+            self.auto_scroll_console = true;
+        }
+    }
+
+    pub fn scroll_logcat_up(&mut self, lines: usize) {
+        let vis = self.logcat_visible_height.get().max(1);
+        let max_scroll = self.effective_logcat_len().saturating_sub(vis);
+        if self.auto_scroll_logcat {
+            self.logcat_scroll = max_scroll;
+            self.auto_scroll_logcat = false;
+        }
+        self.logcat_scroll = self.logcat_scroll.min(max_scroll).saturating_sub(lines);
+    }
+
+    pub fn scroll_logcat_down(&mut self, lines: usize) {
+        let vis = self.logcat_visible_height.get().max(1);
+        let max_scroll = self.effective_logcat_len().saturating_sub(vis);
+        self.logcat_scroll = self.logcat_scroll.saturating_add(lines).min(max_scroll);
+        if self.logcat_scroll >= max_scroll {
+            self.auto_scroll_logcat = true;
+        }
+    }
+
+    pub fn toggle_console_follow(&mut self) {
+        self.auto_scroll_console = !self.auto_scroll_console;
+        let vis = self.console_visible_height.get().max(1);
+        self.console_scroll = self.console_output.len().saturating_sub(vis);
+    }
+
+    pub fn toggle_logcat_follow(&mut self) {
+        self.auto_scroll_logcat = !self.auto_scroll_logcat;
+        let vis = self.logcat_visible_height.get().max(1);
+        self.logcat_scroll = self.effective_logcat_len().saturating_sub(vis);
+    }
+
+    pub fn toggle_maximize_build(&mut self) {
+        let only_build = !self.show_simplified_pane && self.show_build_pane && !self.show_logcat_pane;
+        if only_build {
+            let (s, b, l) = self
+                .saved_panes_before_maximize
+                .take()
+                .unwrap_or((true, true, false));
+            self.show_simplified_pane = s;
+            self.show_build_pane = b;
+            self.show_logcat_pane = l;
+        } else {
+            self.saved_panes_before_maximize = Some((
+                self.show_simplified_pane,
+                self.show_build_pane,
+                self.show_logcat_pane,
+            ));
+            self.show_simplified_pane = false;
+            self.show_build_pane = true;
+            self.show_logcat_pane = false;
+            self.current_panel = Panel::Output;
+        }
+        self.sync_view_mode_from_panes();
+    }
+
+    pub fn toggle_maximize_logcat(&mut self) {
+        let only_logcat = !self.show_simplified_pane && !self.show_build_pane && self.show_logcat_pane;
+        if only_logcat {
+            let (s, b, l) = self
+                .saved_panes_before_maximize
+                .take()
+                .unwrap_or((true, false, true));
+            self.show_simplified_pane = s;
+            self.show_build_pane = b;
+            self.show_logcat_pane = l;
+        } else {
+            self.saved_panes_before_maximize = Some((
+                self.show_simplified_pane,
+                self.show_build_pane,
+                self.show_logcat_pane,
+            ));
+            self.show_simplified_pane = false;
+            self.show_build_pane = false;
+            self.show_logcat_pane = true;
+            self.current_panel = Panel::Logcat;
+        }
+        self.sync_view_mode_from_panes();
     }
 
     pub fn select_next_device(&mut self) {
@@ -856,14 +1282,8 @@ impl AppState {
 
     pub fn scroll_up(&mut self) {
         match self.current_panel {
-            Panel::Output | Panel::Console => {
-                self.auto_scroll_console = false;
-                self.console_scroll = self.console_scroll.saturating_sub(1);
-            }
-            Panel::Logcat => {
-                self.auto_scroll_logcat = false;
-                self.logcat_scroll = self.logcat_scroll.saturating_sub(1);
-            }
+            Panel::Output | Panel::Console => self.scroll_console_up(1),
+            Panel::Logcat => self.scroll_logcat_up(1),
             Panel::Devices => self.select_prev_device(),
             Panel::DeviceControls => {
                 let cols = self.device_controls_grid_cols();
@@ -882,24 +1302,8 @@ impl AppState {
 
     pub fn scroll_down(&mut self) {
         match self.current_panel {
-            Panel::Output | Panel::Console => {
-                let max_scroll = self.console_output.len().saturating_sub(1);
-                if self.console_scroll < max_scroll {
-                    self.console_scroll += 1;
-                }
-                if self.console_scroll >= max_scroll {
-                    self.auto_scroll_console = true;
-                }
-            }
-            Panel::Logcat => {
-                let max_scroll = self.logcat_entries.len().saturating_sub(1);
-                if self.logcat_scroll < max_scroll {
-                    self.logcat_scroll += 1;
-                }
-                if self.logcat_scroll >= max_scroll {
-                    self.auto_scroll_logcat = true;
-                }
-            }
+            Panel::Output | Panel::Console => self.scroll_console_down(1),
+            Panel::Logcat => self.scroll_logcat_down(1),
             Panel::Devices => self.select_next_device(),
             Panel::DeviceControls => {
                 let cols = self.device_controls_grid_cols();

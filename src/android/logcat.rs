@@ -295,10 +295,9 @@ impl LogEntry {
         // 3. Query search filter (case-insensitive across tag, message, raw)
         let q = query.trim();
         if !q.is_empty() {
-            let q_lower = q.to_lowercase();
-            let matches_query = self.tag.to_lowercase().contains(&q_lower)
-                || self.message.to_lowercase().contains(&q_lower)
-                || self.raw.to_lowercase().contains(&q_lower);
+            let matches_query = contains_ignore_case(&self.tag, q)
+                || contains_ignore_case(&self.message, q)
+                || contains_ignore_case(&self.raw, q);
             if !matches_query {
                 return false;
             }
@@ -306,6 +305,21 @@ impl LogEntry {
 
         true
     }
+}
+
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.is_ascii() {
+        let needle_bytes = needle.as_bytes();
+        return haystack
+            .as_bytes()
+            .windows(needle_bytes.len())
+            .any(|w| w.eq_ignore_ascii_case(needle_bytes));
+    }
+    let needle_lower = needle.to_lowercase();
+    haystack.to_lowercase().contains(&needle_lower)
 }
 
 /// Asynchronous logcat stream manager that polls logs via ADB and streams them to the UI.
@@ -970,5 +984,17 @@ u0_a12         100     1     1000   1000 0                   0 S system_server
 ";
         let pids = parse_ps_pids(output, &["com.example.app".to_string()]);
         assert_eq!(pids, vec![4321, 4400]);
+    }
+
+    #[test]
+    fn test_logcat_matches_filter_case_insensitive_ascii_and_unicode() {
+        let entry =
+            LogEntry::parse_line("11-04 10:43:12.345  4321  4321 D MyApp: Café con Leche")
+                .expect("threadtime");
+
+        assert!(entry.matches_filter("myapp", None, None, None));
+        assert!(entry.matches_filter("  LECHE ", None, None, None));
+        assert!(entry.matches_filter("café", None, None, None));
+        assert!(!entry.matches_filter("nonexistent", None, None, None));
     }
 }

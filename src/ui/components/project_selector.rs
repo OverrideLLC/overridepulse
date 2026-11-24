@@ -6,12 +6,17 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, ClickTarget};
 
 /// Renders the interactive project selector modal with rounded borders.
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
     let popup_area = centered_rect(75, 65, area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::DismissModal);
+        hit_map.push(popup_area, ClickTarget::ModalBody);
+    }
 
     // Clear background behind popup
     frame.render_widget(Clear, popup_area);
@@ -151,6 +156,24 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             }
         })
         .collect();
+
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        for idx in 0..app.nearby_projects.len() {
+            let y = list_area.y + idx as u16;
+            if y < list_area.bottom() {
+                hit_map.push(
+                    Rect {
+                        x: list_area.x,
+                        y,
+                        width: list_area.width,
+                        height: 1,
+                    },
+                    ClickTarget::ProjectRow(idx),
+                );
+            }
+        }
+    }
 
     let list = List::new(items);
     frame.render_widget(list, list_area);

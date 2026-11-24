@@ -6,9 +6,25 @@ use ratatui::{
 };
 
 use crate::android::DeviceAction;
-use crate::app::{grid_cols_for_width, AppState, Panel};
+use crate::app::{grid_cols_for_width, AppState, ClickTarget, Panel};
 use crate::i18n::{localized_device_action_title, ui_text};
-use crate::ui::grid::{render_card_grid, GridCardItem};
+use crate::ui::grid::{render_card_grid_with_hits, GridCardItem};
+
+/// Returns a subtle 2-row Braille-dot watermark sprite tailored to each ADB device control.
+pub fn device_action_watermark(action: DeviceAction) -> &'static [&'static str] {
+    match action {
+        DeviceAction::WirelessPairAndConnect => &["⠐⣫⠭⠭⣝⠂", "⠀⠀⠹⠏⠀⠀"],
+        DeviceAction::EnableTcpip5555 => &["⢠⡼⠧⠼⢧⡄", "⠀⠉⢻⡟⠉⠀"],
+        DeviceAction::ToggleWifi => &["⠀⠀⢠⡄⣿⠀", "⠀⠿⠸⠇⠿⠀"],
+        DeviceAction::ToggleMobileData => &["⠠⢾⡷⠄⢰⡆", "⠀⠘⠃⠈⠻⠋"],
+        DeviceAction::ToggleStayAwake => &["⣴⠚⣭⣭⠓⣦", "⠈⠙⠒⠒⠋⠁"],
+        DeviceAction::ToggleDarkMode => &["⢠⣶⡟⠋⠁⠀", "⠈⠛⠷⠦⠄⠀"],
+        DeviceAction::ToggleShowTaps => &["⢠⡞⢩⡍⢳⡄", "⠀⠉⠼⠧⠉⠀"],
+        DeviceAction::OpenWirelessDebuggingSettings => &["⣐⡦⢿⡿⢴⣂", "⠐⠋⠿⠿⠙⠂"],
+        DeviceAction::TakeScreenshot => &["⢰⡞⡻⢟⢳⡆", "⠘⠓⠚⠓⠚⠃"],
+        DeviceAction::RebootDevice => &["⣴⠋⠉⠉⢙⣦", "⠙⠦⠤⠤⠭⠀"],
+    }
+}
 
 fn device_action_icon(action: DeviceAction) -> &'static str {
     match action {
@@ -50,11 +66,14 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
             title: localized_device_action_title(*action, app.language).to_string(),
             subtitle: (*action == DeviceAction::WirelessPairAndConnect)
                 .then(|| "[w]".to_string()),
+            watermark: Some(device_action_watermark(*action)),
         })
         .collect();
 
     let cols = grid_cols_for_width(inner.width, items.len(), 2);
-    render_card_grid(
+    let mut hit_map = app.hit_map.borrow_mut();
+    hit_map.push(area, ClickTarget::FocusPanel(Panel::DeviceControls));
+    render_card_grid_with_hits(
         frame,
         inner,
         &items,
@@ -62,5 +81,6 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         is_focused,
         cols,
         theme,
+        |idx, rect| hit_map.push(rect, ClickTarget::DeviceControlCard(idx)),
     );
 }

@@ -1,5 +1,13 @@
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+macro_rules! cached_re {
+    ($pattern:expr) => {{
+        static RE: OnceLock<Regex> = OnceLock::new();
+        RE.get_or_init(|| Regex::new($pattern).expect("Invalid static regex"))
+    }};
+}
 
 /// Supported build/run target platforms across Android and Kotlin Multiplatform (KMP).
 /// Apple/Native targets are intentionally deferred for a future phase.
@@ -228,17 +236,22 @@ impl AndroidProject {
                 continue;
             }
 
-            let (app_id, namespace, variants) = parse_build_file(&mod_dir);
-            let build_content = std::fs::read_to_string(mod_dir.join("build.gradle.kts"))
-                .or_else(|_| std::fs::read_to_string(mod_dir.join("build.gradle")))
-                .unwrap_or_default();
+            let build_content = read_build_file(&mod_dir).unwrap_or_default();
+            let (app_id, namespace, variants) = if build_content.is_empty() {
+                (None, None, vec!["debug".to_string(), "release".to_string()])
+            } else {
+                parse_build_gradle_content(&build_content)
+            };
 
             if has_kmp_plugin_applied(&build_content) {
                 any_kmp_plugin = true;
             }
             all_targets.extend(parse_kmp_targets_from_gradle(m, &build_content));
 
-            let launcher_activity = parse_manifest_file(&mod_dir);
+            let manifest_content = read_manifest_file(&mod_dir);
+            let launcher_activity = manifest_content
+                .as_deref()
+                .and_then(parse_manifest_launcher_activity);
 
             let is_app_gradle = is_android_application_gradle(&build_content);
             let is_lib_gradle = is_android_library_gradle(&build_content);
@@ -267,7 +280,7 @@ impl AndroidProject {
             } else if tier == 2 {
                 app_id
                     .or(namespace.clone())
-                    .or_else(|| parse_manifest_file_package(&mod_dir))
+                    .or_else(|| manifest_content.as_deref().and_then(parse_manifest_package_name))
             } else {
                 None // Tier 3: Never use library namespace as applicationId
             };
@@ -571,10 +584,10 @@ fn discover_modules_recursive(
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if name_str.starts_with('.')
-                || name_str == "build"
-                || name_str == "target"
-                || name_str == "node_modules"
-                || name_str == "gradle"
+                || matches!(
+                    name_str.as_ref(),
+                    "build" | "target" | "node_modules" | "gradle" | "Pods" | "dist" | "out" | "DerivedData"
+                )
             {
                 continue;
             }
@@ -598,9 +611,9 @@ fn discover_modules_recursive(
 
 /// Strips Gradle `/* ... */` block comments and `// ...` line comments while preserving URLs.
 fn strip_gradle_comments(content: &str) -> String {
-    let block_re = Regex::new(r"(?s)/\*.*?\*/").unwrap();
+    let block_re = cached_re!(r"(?s)/\*.*?\*/");
     let without_blocks = block_re.replace_all(content, "");
-    let line_re = Regex::new(r"(?m)(?:^\s*//.*$|\s+//.*$)").unwrap();
+    let line_re = cached_re!(r"(?m)(?:^\s*//.*$|\s+//.*$)");
     line_re.replace_all(&without_blocks, "").to_string()
 }
 
@@ -623,7 +636,7 @@ pub fn has_kmp_plugin_applied(content: &str) -> bool {
         || cleaned.contains("kotlin('multiplatform')")
         || cleaned.contains("kotlinMultiplatform")
         || cleaned.contains("libs.plugins.kotlin.multiplatform")
-        || Regex::new(r"(?m)^\s*kotlin\s*\{").unwrap().is_match(&cleaned)
+        || cached_re!(r"(?m)^\s*kotlin\s*\{").is_match(&cleaned)
 }
 
 /// Extracts braced block content following a target declaration if present.
@@ -669,26 +682,24 @@ pub fn parse_kmp_targets_from_gradle(module: &str, content: &str) -> Vec<KmpTarg
 
     let has_compose_desktop =
         stripped.contains("compose.desktop") || stripped.contains("desktop.application");
-    let has_application_plugin = Regex::new(
-        r#"(?:id\s*\(\s*['"](?:org\.gradle\.)?application['"]\s*\)|(?m)^\s*application\s*\{|\bmainClass\b)"#,
+    let has_application_plugin = cached_re!(
+        r#"(?:id\s*\(\s*['"](?:org\.gradle\.)?application['"]\s*\)|(?m)^\s*application\s*\{|\bmainClass\b)"#
     )
-    .unwrap()
     .is_match(&active_plugins);
 
     // 1. Android target
     let is_android_app = is_android_application_gradle(&active_plugins);
     let is_android_lib = is_android_library_gradle(&active_plugins);
-    let has_kmp_android = Regex::new(r"(?:^|[\s;])(?:androidTarget|androidLibrary)\s*(?:\(|\{)")
-        .unwrap()
-        .is_match(&stripped);
+    let has_kmp_android =
+        cached_re!(r"(?:^|[\s;])(?:androidTarget|androidLibrary)\s*(?:\(|\{)").is_match(&stripped);
     if is_android_app || is_android_lib || has_kmp_android {
         targets.push(KmpTarget::android(module, !is_android_app));
     }
 
     // 2. JVM / Desktop target
-    let kmp_jvm_re =
-        Regex::new(r#"(?m)(?:^|[\s;])jvm\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?\s*(?:\{|$)"#)
-            .unwrap();
+    let kmp_jvm_re = cached_re!(
+        r#"(?m)(?:^|[\s;])jvm\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?\s*(?:\{|$)"#
+    );
     let mut found_jvm = false;
     for cap in kmp_jvm_re.captures_iter(&stripped) {
         let gradle_name = cap
@@ -734,10 +745,9 @@ pub fn parse_kmp_targets_from_gradle(module: &str, content: &str) -> Vec<KmpTarg
     }
 
     // 3. WasmJS target
-    let wasm_re = Regex::new(
-        r#"(?m)(?:^|[\s;])wasmJs\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?(?:\s*\{|\s*$)"#,
-    )
-    .unwrap();
+    let wasm_re = cached_re!(
+        r#"(?m)(?:^|[\s;])wasmJs\s*(?:\(\s*(?:['"]([a-zA-Z0-9_]+)['"])?\s*\))?(?:\s*\{|\s*$)"#
+    );
     for cap in wasm_re.captures_iter(&stripped) {
         let full = cap.get(0).unwrap();
         let match_end = if full.as_str().ends_with('{') {
@@ -771,8 +781,8 @@ pub fn parse_kmp_targets_from_gradle(module: &str, content: &str) -> Vec<KmpTarg
     }
 
     // 4. JS target
-    let js_re = Regex::new(r#"(?m)(?:^|[\s;])js\s*(?:\(([^)]*)\))?\s*(?:\{|$)"#).unwrap();
-    let quoted_name_re = Regex::new(r#"['"]([a-zA-Z0-9_]+)['"]"#).unwrap();
+    let js_re = cached_re!(r#"(?m)(?:^|[\s;])js\s*(?:\(([^)]*)\))?\s*(?:\{|$)"#);
+    let quoted_name_re = cached_re!(r#"['"]([a-zA-Z0-9_]+)['"]"#);
     for cap in js_re.captures_iter(&stripped) {
         let full = cap.get(0).unwrap();
         let args = cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -983,14 +993,14 @@ fn parse_settings_file(dir: &Path) -> (Option<String>, Vec<String>) {
 /// Parses the contents of a `settings.gradle` or `settings.gradle.kts` file.
 pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
     // 1. rootProject.name
-    let name_regex = Regex::new(r#"rootProject\.name\s*=\s*['"]([^'"]+)['"]"#).unwrap();
+    let name_regex = cached_re!(r#"rootProject\.name\s*=\s*['"]([^'"]+)['"]"#);
     let name = name_regex.captures(content).map(|cap| cap[1].to_string());
 
-    let module_regex = Regex::new(r#"['"](:?[\w\-:]+)['"]"#).unwrap();
+    let module_regex = cached_re!(r#"['"](:?[\w\-:]+)['"]"#);
     let mut modules = Vec::new();
 
     // 2. include(...) blocks (supports multiline and single-line with parentheses)
-    let include_paren_regex = Regex::new(r#"(?s)\binclude\s*\(([^)]+)\)"#).unwrap();
+    let include_paren_regex = cached_re!(r#"(?s)\binclude\s*\(([^)]+)\)"#);
     for cap in include_paren_regex.captures_iter(content) {
         let args = &cap[1];
         for mod_cap in module_regex.captures_iter(args) {
@@ -1005,7 +1015,7 @@ pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
     }
 
     // 3. include lines without parentheses (Groovy style: `include ':app', ':core'`)
-    let include_line_regex = Regex::new(r#"(?m)^\s*include\s+([^\r\n(]+)"#).unwrap();
+    let include_line_regex = cached_re!(r#"(?m)^\s*include\s+([^\r\n(]+)"#);
     for cap in include_line_regex.captures_iter(content) {
         let line = &cap[1];
         for mod_cap in module_regex.captures_iter(line) {
@@ -1021,7 +1031,7 @@ pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
 
     // 4. includeBuild lines/blocks (e.g. includeBuild("build-logic") or includeBuild 'logic')
     let include_build_regex =
-        Regex::new(r#"\bincludeBuild\s*\(?\s*['"]([^'"]+)['"]\s*\)?"#).unwrap();
+        cached_re!(r#"\bincludeBuild\s*\(?\s*['"]([^'"]+)['"]\s*\)?"#);
     for cap in include_build_regex.captures_iter(content) {
         let mut m = cap[1].to_string();
         if !m.starts_with(':') {
@@ -1035,33 +1045,26 @@ pub fn parse_settings_content(content: &str) -> (Option<String>, Vec<String>) {
     (name, modules)
 }
 
-/// Reads and parses `build.gradle` or `build.gradle.kts` in `dir`.
-fn parse_build_file(dir: &Path) -> (Option<String>, Option<String>, Vec<String>) {
+/// Reads `build.gradle.kts` or `build.gradle` in `dir`.
+fn read_build_file(dir: &Path) -> Option<String> {
     let kts_path = dir.join("build.gradle.kts");
+    if let Ok(content) = std::fs::read_to_string(&kts_path) {
+        return Some(content);
+    }
     let groovy_path = dir.join("build.gradle");
-
-    let content = if kts_path.exists() {
-        std::fs::read_to_string(&kts_path).unwrap_or_default()
-    } else if groovy_path.exists() {
-        std::fs::read_to_string(&groovy_path).unwrap_or_default()
-    } else {
-        return (None, None, vec!["debug".to_string(), "release".to_string()]);
-    };
-
-    parse_build_gradle_content(&content)
+    std::fs::read_to_string(&groovy_path).ok()
 }
 
 /// Parses `applicationId`, `namespace`, and build variants from `build.gradle[.kts]` content.
 pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<String>, Vec<String>) {
     // 1. applicationId (supports =, parentheses, quotes, setApplicationId, mainApplicationId)
-    let app_id_regex = Regex::new(
-        r#"(?:applicationId|mainApplicationId|setApplicationId)\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#,
-    )
-    .unwrap();
+    let app_id_regex = cached_re!(
+        r#"(?:applicationId|mainApplicationId|setApplicationId)\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#
+    );
     let application_id = app_id_regex.captures(content).map(|cap| cap[1].to_string());
 
     // 2. namespace (supports =, parentheses, quotes)
-    let namespace_regex = Regex::new(r#"namespace\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#).unwrap();
+    let namespace_regex = cached_re!(r#"namespace\s*(?:=\s*|\(\s*)?['"]([^'"]+)['"]"#);
     let namespace = namespace_regex
         .captures(content)
         .map(|cap| cap[1].to_string());
@@ -1072,11 +1075,13 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
 
     // Extract buildTypes block
     let build_types_regex =
-        Regex::new(r#"(?s)buildTypes\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"#).unwrap();
+        cached_re!(r#"(?s)buildTypes\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"#);
+    let block_name_regex = cached_re!(r#"(?m)^\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\{"#);
+    let kts_name_regex =
+        cached_re!(r#"(?:getByName|create|register|named)\s*\(\s*['"]([^'"]+)['"]\s*\)"#);
     if let Some(bt_block) = build_types_regex.captures(content) {
         let block_content = &bt_block[1];
         // Match Groovy block names like `release {` or `debug {` or `staging {`
-        let block_name_regex = Regex::new(r#"(?m)^\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\{"#).unwrap();
         for cap in block_name_regex.captures_iter(block_content) {
             let name = &cap[1];
             if !matches!(
@@ -1087,9 +1092,6 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
             }
         }
         // Match Kotlin DSL: getByName("release"), create("staging"), register("benchmark")
-        let kts_name_regex =
-            Regex::new(r#"(?:getByName|create|register|named)\s*\(\s*['"]([^'"]+)['"]\s*\)"#)
-                .unwrap();
         for cap in kts_name_regex.captures_iter(block_content) {
             build_types.push(cap[1].to_string());
         }
@@ -1097,10 +1099,9 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
 
     // Extract productFlavors block
     let flavors_regex =
-        Regex::new(r#"(?s)productFlavors\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"#).unwrap();
+        cached_re!(r#"(?s)productFlavors\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"#);
     if let Some(pf_block) = flavors_regex.captures(content) {
         let block_content = &pf_block[1];
-        let block_name_regex = Regex::new(r#"(?m)^\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\{"#).unwrap();
         for cap in block_name_regex.captures_iter(block_content) {
             let name = &cap[1];
             if !matches!(
@@ -1110,9 +1111,6 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
                 flavors.push(name.to_string());
             }
         }
-        let kts_name_regex =
-            Regex::new(r#"(?:getByName|create|register|named)\s*\(\s*['"]([^'"]+)['"]\s*\)"#)
-                .unwrap();
         for cap in kts_name_regex.captures_iter(block_content) {
             flavors.push(cap[1].to_string());
         }
@@ -1155,51 +1153,31 @@ pub fn parse_build_gradle_content(content: &str) -> (Option<String>, Option<Stri
     (application_id, namespace, deduped_variants)
 }
 
-/// Reads and parses `AndroidManifest.xml` in `module_dir`, `module_dir/src/main`, or `module_dir/src/androidMain`.
-fn parse_manifest_file(dir: &Path) -> Option<String> {
-    let direct_manifest = dir.join("AndroidManifest.xml");
-    let src_manifest = dir.join("src/main/AndroidManifest.xml");
-    let kmp_manifest = dir.join("src/androidMain/AndroidManifest.xml");
-
-    let path = if src_manifest.exists() {
-        src_manifest
-    } else if kmp_manifest.exists() {
-        kmp_manifest
-    } else if direct_manifest.exists() {
-        direct_manifest
-    } else {
-        return None;
-    };
-
-    let content = std::fs::read_to_string(path).ok()?;
-    parse_manifest_launcher_activity(&content)
+/// Reads `AndroidManifest.xml` in `module_dir/src/main`, `module_dir/src/androidMain`, or `module_dir`.
+fn read_manifest_file(dir: &Path) -> Option<String> {
+    for rel in [
+        "src/main/AndroidManifest.xml",
+        "src/androidMain/AndroidManifest.xml",
+        "AndroidManifest.xml",
+    ] {
+        if let Ok(content) = std::fs::read_to_string(dir.join(rel)) {
+            return Some(content);
+        }
+    }
+    None
 }
 
-/// Reads and parses the `package="..."` attribute from `AndroidManifest.xml` in `module_dir` or its src subdirectories.
-fn parse_manifest_file_package(dir: &Path) -> Option<String> {
-    let direct_manifest = dir.join("AndroidManifest.xml");
-    let src_manifest = dir.join("src/main/AndroidManifest.xml");
-    let kmp_manifest = dir.join("src/androidMain/AndroidManifest.xml");
-
-    let path = if src_manifest.exists() {
-        src_manifest
-    } else if kmp_manifest.exists() {
-        kmp_manifest
-    } else if direct_manifest.exists() {
-        direct_manifest
-    } else {
-        return None;
-    };
-
-    let content = std::fs::read_to_string(path).ok()?;
-    parse_manifest_package_name(&content)
+/// Reads and parses `AndroidManifest.xml` in `module_dir`, `module_dir/src/main`, or `module_dir/src/androidMain`.
+fn parse_manifest_file(dir: &Path) -> Option<String> {
+    let content = read_manifest_file(dir)?;
+    parse_manifest_launcher_activity(&content)
 }
 
 /// Extracts the launcher activity (`android.intent.action.MAIN` + `android.intent.category.LAUNCHER`) from manifest XML.
 pub fn parse_manifest_launcher_activity(content: &str) -> Option<String> {
-    let activity_regex = Regex::new(r#"(?s)<activity\b.*?</activity>"#).unwrap();
-    let alias_regex = Regex::new(r#"(?s)<activity-alias\b.*?</activity-alias>"#).unwrap();
-    let name_attr_regex = Regex::new(r#"android:name\s*=\s*['"]([^'"]+)['"]"#).unwrap();
+    let activity_regex = cached_re!(r#"(?s)<activity\b.*?</activity>"#);
+    let alias_regex = cached_re!(r#"(?s)<activity-alias\b.*?</activity-alias>"#);
+    let name_attr_regex = cached_re!(r#"android:name\s*=\s*['"]([^'"]+)['"]"#);
 
     let check_block = |block: &str| -> Option<String> {
         let has_main = block.contains("android.intent.action.MAIN");
@@ -1230,22 +1208,21 @@ pub fn parse_manifest_launcher_activity(content: &str) -> Option<String> {
 
 /// Parses the `applicationId` attribute from Gradle's `output-metadata.json`.
 pub fn parse_output_metadata(content: &str) -> Option<String> {
-    let re = Regex::new(r#""applicationId"\s*:\s*['"]([^'"]+)['"]"#).unwrap();
+    let re = cached_re!(r#""applicationId"\s*:\s*['"]([^'"]+)['"]"#);
     re.captures(content).map(|c| c[1].to_string())
 }
 
 /// Parses application ID or namespace definitions from `gradle.properties`.
 pub fn parse_gradle_properties_app_id(content: &str) -> Option<String> {
-    let re = Regex::new(
-        r#"(?m)^\s*(?:APP_ID|APPLICATION_ID|PACKAGE_NAME|applicationId|namespace)\s*=\s*['"]?([a-zA-Z0-9_\.]+)['"]?"#,
-    )
-    .unwrap();
+    let re = cached_re!(
+        r#"(?m)^\s*(?:APP_ID|APPLICATION_ID|PACKAGE_NAME|applicationId|namespace)\s*=\s*['"]?([a-zA-Z0-9_\.]+)['"]?"#
+    );
     re.captures(content).map(|c| c[1].to_string())
 }
 
 /// Parses the `package="..."` attribute from an `AndroidManifest.xml` string.
 pub fn parse_manifest_package_name(content: &str) -> Option<String> {
-    let re = Regex::new(r#"package\s*=\s*['"]([^'"]+)['"]"#).unwrap();
+    let re = cached_re!(r#"package\s*=\s*['"]([^'"]+)['"]"#);
     re.captures(content).map(|c| c[1].to_string())
 }
 

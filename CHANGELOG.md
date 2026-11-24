@@ -6,6 +6,20 @@ All notable changes to **OverridePulse** are documented in this file.
 
 ---
 
+## [0.4.0] — 2026-11-24
+
+### Added
+- **Full Settings View (`[s]` / `,`)**: Sidebar navigation (`Appearance & Language`, `ADB & Android SDK`, `Console & Logcat`, `About & App Info` with `https://www.override.com.mx/pulse`), live theme/language switching, custom `adb_path` persistence (`~/.config/overridepulse/config`), SDK re-detection, and ADB server restart (`adb kill-server && adb start-server`).
+- **Full Mouse Support**: Clickable action cards, ADB device controls, footer pills, settings sidebar/items, console tabs, and modals (`Esc`/outside-click dismiss), plus direct mouse-wheel scrolling over Build and Logcat without stealing focus.
+- **Braille Dot Watermarks**: Subtle, non-overlapping 2-row Unicode Braille figures in the bottom-right corner of every `QuickAction` and `DeviceAction` card.
+- **Interactive Build & Logcat Toolbars + Scrollbars**: One-click emoji toolbars (`📋` copy, `⬇`/`⏸` follow/pause, `🗑` clear, `⤢`/`⤡` expand/split, `📦`/`🌐` scope, `🔍` filter, `✕` clear filter) and vertical scrollbars.
+
+### Fixed & Optimized
+- **Immediate Scrollbar & Wheel Response**: Fixed `console_scroll` and `logcat_scroll` starting offset relative to viewport height so scrolling up responds on the very first notch, and `Tab` cycles cleanly across all visible console panes.
+- **UI & Background Optimizations**: Dirty-flag + burst-coalesced event loop, batched/cached ADB device polling, `OnceLock`-cached Gradle/manifest regexes, module-scoped APK/AAB lookup, and zero-allocation ASCII logcat filtering.
+
+---
+
 ## [0.3.1] — 2026-11-23
 
 ### Added

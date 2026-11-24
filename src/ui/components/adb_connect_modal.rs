@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, ClickTarget};
 
 /// Renders the ADB Wireless Pair & Connect modal dialog with rounded borders,
 /// interactive text input fields, and keybinding navigation instructions:
@@ -14,6 +14,11 @@ use crate::app::AppState;
 pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
     let popup_area = centered_rect(62, 55, area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::DismissModal);
+        hit_map.push(popup_area, ClickTarget::ModalBody);
+    }
 
     // Clear background behind modal popup
     frame.render_widget(Clear, popup_area);
@@ -191,6 +196,31 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled("[Esc] ", key_style),
         Span::styled("Cancel", desc_style),
     ]);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(vertical_chunks[1], ClickTarget::AdbModalField(0));
+        hit_map.push(vertical_chunks[2], ClickTarget::AdbModalField(1));
+        hit_map.push(vertical_chunks[3], ClickTarget::AdbModalField(2));
+        let half = vertical_chunks[4].width / 2;
+        hit_map.push(
+            Rect {
+                x: vertical_chunks[4].x,
+                y: vertical_chunks[4].y,
+                width: half,
+                height: vertical_chunks[4].height,
+            },
+            ClickTarget::AdbModalSubmit,
+        );
+        hit_map.push(
+            Rect {
+                x: vertical_chunks[4].x + half,
+                y: vertical_chunks[4].y,
+                width: vertical_chunks[4].width.saturating_sub(half),
+                height: vertical_chunks[4].height,
+            },
+            ClickTarget::AdbModalCancel,
+        );
+    }
     frame.render_widget(
         Paragraph::new(instructions).alignment(Alignment::Center),
         vertical_chunks[4],

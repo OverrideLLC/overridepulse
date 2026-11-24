@@ -4,16 +4,114 @@ pub mod device_controls;
 pub mod device_panel;
 pub mod grid;
 pub mod logcat_view;
+pub mod settings_view;
 pub mod simplified_view;
 pub mod terminal_log;
 pub mod theme;
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, ClickTarget, Panel};
+use crate::ui::theme::ThemePalette;
+
+pub struct ToolbarButton<'a> {
+    pub label: &'a str,
+    pub fg: Color,
+    pub target: ClickTarget,
+}
+
+/// Renders a 1-row interactive toolbar with clickable pill buttons and optional right status text.
+pub fn render_pane_toolbar(
+    frame: &mut Frame,
+    app: &AppState,
+    area: Rect,
+    buttons: &[ToolbarButton<'_>],
+    right_info: Option<&str>,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let theme = app.palette();
+    let mut spans = Vec::new();
+    let mut x_cursor = area.x;
+    let mut hit_map = app.hit_map.borrow_mut();
+
+    for (idx, btn) in buttons.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" ", Style::default().bg(theme.bg_card)));
+            x_cursor = x_cursor.saturating_add(1);
+        }
+        let text = format!("[{}]", btn.label);
+        let w = text.chars().count() as u16;
+        if x_cursor < area.right() {
+            let clamped = w.min(area.right() - x_cursor);
+            hit_map.push(
+                Rect {
+                    x: x_cursor,
+                    y: area.y,
+                    width: clamped,
+                    height: 1,
+                },
+                btn.target,
+            );
+        }
+        spans.push(Span::styled(
+            text,
+            Style::default()
+                .fg(btn.fg)
+                .bg(theme.bg_card)
+                .add_modifier(Modifier::BOLD),
+        ));
+        x_cursor = x_cursor.saturating_add(w);
+    }
+
+    if let Some(info) = right_info {
+        let info_w = info.chars().count() as u16;
+        if area.right() > x_cursor.saturating_add(info_w + 1) {
+            let pad = (area.right() - x_cursor - info_w - 1) as usize;
+            spans.push(Span::styled(
+                " ".repeat(pad),
+                Style::default().bg(theme.bg_card),
+            ));
+            spans.push(Span::styled(
+                info.to_string(),
+                Style::default().fg(theme.text_muted).bg(theme.bg_card),
+            ));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.bg_card)),
+        area,
+    );
+}
+
+/// Renders a vertical scrollbar on the right edge when content overflows the viewport.
+pub fn render_vertical_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    total_lines: usize,
+    visible_height: usize,
+    scroll_pos: usize,
+    theme: ThemePalette,
+) {
+    if total_lines <= visible_height || area.width < 3 || area.height < 2 {
+        return;
+    }
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let mut state = ScrollbarState::new(max_scroll).position(scroll_pos.min(max_scroll));
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(Style::default().fg(theme.accent))
+        .track_style(Style::default().fg(theme.inactive_border));
+    frame.render_stateful_widget(scrollbar, area, &mut state);
+}
 
 /// Renders the complete application user interface on the given Ratatui frame,
 /// according to the v0.2.0-B UI/UX specifications:
@@ -23,6 +121,7 @@ use crate::app::AppState;
 /// - Bottom footer (left shortcuts + right project & variant badge)
 /// - Modal overlays: Project selector, ADB Pair & Connect modal, Help, and Search
 pub fn render(frame: &mut Frame, app: &AppState) {
+    app.hit_map.borrow_mut().clear();
     let size = frame.area();
 
     // Main vertical layout: Body and Footer (No top header)
@@ -37,7 +136,9 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     let body_area = vertical_chunks[0];
     let footer_area = vertical_chunks[1];
 
-    if app.devices_view_active {
+    if app.settings_view_active {
+        settings_view::render(frame, app, body_area);
+    } else if app.devices_view_active {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
@@ -61,6 +162,12 @@ pub fn render(frame: &mut Frame, app: &AppState) {
         let active_build = app.show_build_pane;
         let active_logcat = app.show_logcat_pane;
 
+        let register_pane = |rect: Rect, panel: Panel| {
+            let mut hit_map = app.hit_map.borrow_mut();
+            hit_map.push(rect, ClickTarget::FocusPanel(panel));
+            hit_map.push_scroll(rect, ClickTarget::ScrollArea(panel));
+        };
+
         match (active_simplified, active_build, active_logcat) {
             // Triple view: All 3 active
             (true, true, true) => {
@@ -72,6 +179,9 @@ pub fn render(frame: &mut Frame, app: &AppState) {
                         Constraint::Percentage(36), // Live Logcat
                     ])
                     .split(bottom_area);
+                register_pane(cols[0], Panel::Console);
+                register_pane(cols[1], Panel::Output);
+                register_pane(cols[2], Panel::Logcat);
                 simplified_view::render(frame, app, cols[0]);
                 terminal_log::render(frame, app, cols[1]);
                 logcat_view::render(frame, app, cols[2]);
@@ -85,6 +195,8 @@ pub fn render(frame: &mut Frame, app: &AppState) {
                         Constraint::Percentage(65), // Live Logcat
                     ])
                     .split(bottom_area);
+                register_pane(cols[0], Panel::Console);
+                register_pane(cols[1], Panel::Logcat);
                 simplified_view::render(frame, app, cols[0]);
                 logcat_view::render(frame, app, cols[1]);
             }
@@ -97,6 +209,8 @@ pub fn render(frame: &mut Frame, app: &AppState) {
                         Constraint::Percentage(65), // Build Output
                     ])
                     .split(bottom_area);
+                register_pane(cols[0], Panel::Console);
+                register_pane(cols[1], Panel::Output);
                 simplified_view::render(frame, app, cols[0]);
                 terminal_log::render(frame, app, cols[1]);
             }
@@ -109,23 +223,29 @@ pub fn render(frame: &mut Frame, app: &AppState) {
                         Constraint::Percentage(50), // Live Logcat
                     ])
                     .split(bottom_area);
+                register_pane(cols[0], Panel::Output);
+                register_pane(cols[1], Panel::Logcat);
                 terminal_log::render(frame, app, cols[0]);
                 logcat_view::render(frame, app, cols[1]);
             }
             // Single view: Simplified only
             (true, false, false) => {
+                register_pane(bottom_area, Panel::Console);
                 simplified_view::render(frame, app, bottom_area);
             }
             // Single view: Build only
             (false, true, false) => {
+                register_pane(bottom_area, Panel::Output);
                 terminal_log::render(frame, app, bottom_area);
             }
             // Single view: Logcat only
             (false, false, true) => {
+                register_pane(bottom_area, Panel::Logcat);
                 logcat_view::render(frame, app, bottom_area);
             }
             // Fallback: Default to Simplified
             (false, false, false) => {
+                register_pane(bottom_area, Panel::Console);
                 simplified_view::render(frame, app, bottom_area);
             }
         }
@@ -142,7 +262,7 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     } else if app.adb_connect_modal_active {
         components::adb_connect_modal::render(frame, app, size);
     } else if app.help_active {
-        components::help::render(frame, size, app.palette(), app.language);
+        components::help::render(frame, app, size);
     } else if app.search_active {
         components::search::render(frame, app, size);
     }
@@ -361,5 +481,80 @@ mod tests {
         app.onboarding_step = 2;
         app.next_theme();
         assert!(terminal.draw(|f| render(f, &app)).is_ok());
+    }
+
+    #[test]
+    fn test_render_settings_view_all_sections() {
+        use crate::app::{SettingsFocus, SettingsSection};
+        use crate::i18n::Language;
+
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        app.toggle_settings_view();
+        app.settings_focus = SettingsFocus::Content;
+
+        for section in SettingsSection::all() {
+            app.settings_section = *section;
+            app.set_language(Language::En);
+            assert!(terminal.draw(|f| render(f, &app)).is_ok());
+
+            app.set_language(Language::Es);
+            assert!(terminal.draw(|f| render(f, &app)).is_ok());
+        }
+
+        // Inline ADB path editing state
+        app.settings_section = SettingsSection::AdbSdk;
+        app.settings_editing_adb_path = true;
+        app.settings_adb_input = "/custom/adb".to_string();
+        assert!(terminal.draw(|f| render(f, &app)).is_ok());
+    }
+
+    #[test]
+    fn test_footer_displays_settings_option_on_narrow_terminal() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let bottom_row: String = (0..80)
+            .map(|x| buf[(x, 22)].symbol())
+            .collect();
+        assert!(
+            bottom_row.contains("[s] ⚙"),
+            "Expected footer to display [s] ⚙, got: {bottom_row}"
+        );
+    }
+
+    #[test]
+    fn test_action_cards_render_braille_watermarks_without_clipping_titles() {
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut app = AppState::new(PathBuf::from("."));
+        app.project_selector_active = false;
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let all_text: String = (0..36)
+            .map(|y| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Title remains intact and Braille dot watermark chars are present in the action deck.
+        assert!(all_text.contains("Build & Install"));
+        assert!(all_text
+            .chars()
+            .any(|c| ('\u{2801}'..='\u{28FF}').contains(&c)));
+
+        // Also ensure compact terminal sizes render safely.
+        let small_backend = TestBackend::new(80, 22);
+        let mut small_term = Terminal::new(small_backend).unwrap();
+        assert!(small_term.draw(|f| render(f, &app)).is_ok());
     }
 }

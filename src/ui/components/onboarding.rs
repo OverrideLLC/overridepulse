@@ -6,9 +6,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppState;
+use crate::android::{DeviceAction, QuickAction};
+use crate::app::{AppState, ClickTarget};
 use crate::i18n::Language;
-use crate::ui::grid::{render_card_grid, GridCardItem};
+use crate::ui::action_deck::action_watermark;
+use crate::ui::device_controls::device_action_watermark;
+use crate::ui::grid::{render_card_grid, render_card_grid_with_hits, GridCardItem};
 use crate::ui::theme::ThemePreset;
 
 /// Renders the 3-step visual & interactive first-run onboarding modal:
@@ -19,6 +22,11 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
     let theme = app.palette();
     let lang = app.language;
     let popup_area = centered_rect(82, 82, area);
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        hit_map.push(area, ClickTarget::DismissModal);
+        hit_map.push(popup_area, ClickTarget::ModalBody);
+    }
     frame.render_widget(Clear, popup_area);
 
     let title = match (lang, app.onboarding_step) {
@@ -144,6 +152,60 @@ pub fn render(frame: &mut Frame, app: &AppState, area: Rect) {
         ]),
     };
 
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        let third = footer_area.width / 3;
+        if app.onboarding_step > 0 {
+            hit_map.push(
+                Rect {
+                    x: footer_area.x,
+                    y: footer_area.y,
+                    width: third,
+                    height: footer_area.height,
+                },
+                ClickTarget::OnboardingBack,
+            );
+            hit_map.push(
+                Rect {
+                    x: footer_area.x + third,
+                    y: footer_area.y,
+                    width: third,
+                    height: footer_area.height,
+                },
+                ClickTarget::OnboardingNext,
+            );
+            hit_map.push(
+                Rect {
+                    x: footer_area.x + third * 2,
+                    y: footer_area.y,
+                    width: footer_area.width.saturating_sub(third * 2),
+                    height: footer_area.height,
+                },
+                ClickTarget::OnboardingSkip,
+            );
+        } else {
+            let half = footer_area.width / 2;
+            hit_map.push(
+                Rect {
+                    x: footer_area.x,
+                    y: footer_area.y,
+                    width: half,
+                    height: footer_area.height,
+                },
+                ClickTarget::OnboardingNext,
+            );
+            hit_map.push(
+                Rect {
+                    x: footer_area.x + half,
+                    y: footer_area.y,
+                    width: footer_area.width.saturating_sub(half),
+                    height: footer_area.height,
+                },
+                ClickTarget::OnboardingSkip,
+            );
+        }
+    }
+
     frame.render_widget(
         Paragraph::new(footer_line).alignment(Alignment::Center),
         footer_area,
@@ -197,9 +259,11 @@ fn render_language_step(frame: &mut Frame, app: &AppState, area: Rect) {
             badge: Some(l.code().to_uppercase()),
             title: l.name().to_string(),
             subtitle: Some(l.native_tagline().to_string()),
+            ..Default::default()
         })
         .collect();
-    render_card_grid(
+    let mut hit_map = app.hit_map.borrow_mut();
+    render_card_grid_with_hits(
         frame,
         chunks[1],
         &lang_items,
@@ -207,7 +271,9 @@ fn render_language_step(frame: &mut Frame, app: &AppState, area: Rect) {
         true,
         2,
         theme,
+        |idx, rect| hit_map.push(rect, ClickTarget::OnboardingLanguage(idx)),
     );
+    drop(hit_map);
 
     let preview_title = match lang {
         Language::En => " Live Workspace Preview ",
@@ -318,6 +384,24 @@ fn render_tour_step(frame: &mut Frame, app: &AppState, area: Rect) {
             }
         })
         .collect();
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        for idx in 0..chapters.len() {
+            let y = left_inner.y + (idx as u16) * 2;
+            if y < left_inner.bottom() {
+                hit_map.push(
+                    Rect {
+                        x: left_inner.x,
+                        y,
+                        width: left_inner.width,
+                        height: 2.min(left_inner.bottom() - y),
+                    },
+                    ClickTarget::OnboardingTourChapter(idx),
+                );
+            }
+        }
+        hit_map.push(cols[1], ClickTarget::OnboardingPreview);
+    }
     frame.render_widget(List::new(items), left_inner);
 
     // Right: Live visual component preview for the selected chapter
@@ -393,21 +477,25 @@ fn render_tour_preview(frame: &mut Frame, app: &AppState, area: Rect) {
                         badge: Some("[b]".to_string()),
                         title: "Compile Target".to_string(),
                         subtitle: Some("Gradle build".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpCompileTarget)),
                     },
                     GridCardItem {
                         badge: Some("[r]".to_string()),
                         title: "Run / Dev Server".to_string(),
                         subtitle: Some("Launch app".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpRunTarget)),
                     },
                     GridCardItem {
                         badge: None,
                         title: "Bundle Dist".to_string(),
                         subtitle: Some("Release output".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpBundleDist)),
                     },
                     GridCardItem {
                         badge: Some("[g]".to_string()),
                         title: "Stop Gradle".to_string(),
                         subtitle: Some("Kill daemons".to_string()),
+                        watermark: Some(action_watermark(QuickAction::StopGradleDaemons)),
                     },
                 ],
                 Language::Es => vec![
@@ -415,21 +503,25 @@ fn render_tour_preview(frame: &mut Frame, app: &AppState, area: Rect) {
                         badge: Some("[b]".to_string()),
                         title: "Compilar Target".to_string(),
                         subtitle: Some("Build Gradle".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpCompileTarget)),
                     },
                     GridCardItem {
                         badge: Some("[r]".to_string()),
                         title: "Ejecutar / Server".to_string(),
                         subtitle: Some("Lanzar app".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpRunTarget)),
                     },
                     GridCardItem {
                         badge: None,
                         title: "Empaquetar Dist".to_string(),
                         subtitle: Some("Build final".to_string()),
+                        watermark: Some(action_watermark(QuickAction::KmpBundleDist)),
                     },
                     GridCardItem {
                         badge: Some("[g]".to_string()),
                         title: "Detener Gradle".to_string(),
                         subtitle: Some("Limpiar daemons".to_string()),
+                        watermark: Some(action_watermark(QuickAction::StopGradleDaemons)),
                     },
                 ],
             };
@@ -457,21 +549,25 @@ fn render_tour_preview(frame: &mut Frame, app: &AppState, area: Rect) {
                     badge: Some("🤖".to_string()),
                     title: "Android (:composeApp)".to_string(),
                     subtitle: Some(adb_req.to_string()),
+                    ..Default::default()
                 },
                 GridCardItem {
                     badge: Some("☕".to_string()),
                     title: "JVM [desktop]".to_string(),
                     subtitle: Some(no_adb.to_string()),
+                    ..Default::default()
                 },
                 GridCardItem {
                     badge: Some("🕸".to_string()),
                     title: "WasmJS (:composeApp)".to_string(),
                     subtitle: Some(no_adb.to_string()),
+                    ..Default::default()
                 },
                 GridCardItem {
                     badge: Some("🟨".to_string()),
                     title: "JS (:webApp)".to_string(),
                     subtitle: Some(no_adb.to_string()),
+                    ..Default::default()
                 },
             ];
             render_card_grid(
@@ -562,21 +658,27 @@ fn render_tour_preview(frame: &mut Frame, app: &AppState, area: Rect) {
                         badge: Some("📡".to_string()),
                         title: "Toggle Wi-Fi".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::ToggleWifi)),
                     },
                     GridCardItem {
                         badge: Some("🌓".to_string()),
                         title: "Dark Theme".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::ToggleDarkMode)),
                     },
                     GridCardItem {
                         badge: Some("📸".to_string()),
                         title: "Screenshot".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::TakeScreenshot)),
                     },
                     GridCardItem {
                         badge: Some("📶".to_string()),
                         title: "Wi-Fi ADB [w]".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(
+                            DeviceAction::WirelessPairAndConnect,
+                        )),
                     },
                 ],
                 Language::Es => vec![
@@ -584,21 +686,27 @@ fn render_tour_preview(frame: &mut Frame, app: &AppState, area: Rect) {
                         badge: Some("📡".to_string()),
                         title: "Alternar Wi-Fi".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::ToggleWifi)),
                     },
                     GridCardItem {
                         badge: Some("🌓".to_string()),
                         title: "Tema Oscuro".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::ToggleDarkMode)),
                     },
                     GridCardItem {
                         badge: Some("📸".to_string()),
                         title: "Captura".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(DeviceAction::TakeScreenshot)),
                     },
                     GridCardItem {
                         badge: Some("📶".to_string()),
                         title: "ADB Wi-Fi [w]".to_string(),
                         subtitle: None,
+                        watermark: Some(device_action_watermark(
+                            DeviceAction::WirelessPairAndConnect,
+                        )),
                     },
                 ],
             };
@@ -686,6 +794,24 @@ fn render_theme_step(frame: &mut Frame, app: &AppState, area: Rect) {
         })
         .collect();
 
+    {
+        let mut hit_map = app.hit_map.borrow_mut();
+        for idx in 0..ThemePreset::all().len() {
+            let y = chunks[1].y + idx as u16;
+            if y < chunks[1].bottom() {
+                hit_map.push(
+                    Rect {
+                        x: chunks[1].x,
+                        y,
+                        width: chunks[1].width,
+                        height: 1,
+                    },
+                    ClickTarget::OnboardingTheme(idx),
+                );
+            }
+        }
+    }
+
     frame.render_widget(List::new(items), chunks[1]);
 
     // Mini themed card preview strip at bottom of step 3
@@ -695,11 +821,13 @@ fn render_theme_step(frame: &mut Frame, app: &AppState, area: Rect) {
                 badge: Some("[b]".to_string()),
                 title: "Build & Install".to_string(),
                 subtitle: None,
+                watermark: Some(action_watermark(QuickAction::BuildAndInstallDebug)),
             },
             GridCardItem {
                 badge: Some("[r]".to_string()),
                 title: "Run Dev Server".to_string(),
                 subtitle: None,
+                watermark: Some(action_watermark(QuickAction::KmpRunTarget)),
             },
         ],
         Language::Es => vec![
@@ -707,11 +835,13 @@ fn render_theme_step(frame: &mut Frame, app: &AppState, area: Rect) {
                 badge: Some("[b]".to_string()),
                 title: "Compilar Target".to_string(),
                 subtitle: None,
+                watermark: Some(action_watermark(QuickAction::KmpCompileTarget)),
             },
             GridCardItem {
                 badge: Some("[r]".to_string()),
                 title: "Ejecutar Server".to_string(),
                 subtitle: None,
+                watermark: Some(action_watermark(QuickAction::KmpRunTarget)),
             },
         ],
     };

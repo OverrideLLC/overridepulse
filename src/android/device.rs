@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -234,47 +235,77 @@ pub fn parse_battery_level(output: &str) -> Option<u8> {
     None
 }
 
+#[derive(Debug, Clone)]
+struct CachedDeviceInfo {
+    android_version: Option<String>,
+    api_level: Option<u32>,
+    battery_level: Option<u8>,
+}
+
+/// Parses batched ADB shell output containing `__VER__=...`, `__SDK__=...`, and `dumpsys battery`.
+fn parse_combined_device_details(output: &str) -> (Option<u8>, Option<String>, Option<u32>) {
+    let mut android_version = None;
+    let mut api_level = None;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(ver) = trimmed.strip_prefix("__VER__=") {
+            let v = ver.trim();
+            if !v.is_empty() {
+                android_version = Some(v.to_string());
+            }
+        } else if let Some(sdk) = trimmed.strip_prefix("__SDK__=") {
+            if let Ok(parsed) = sdk.trim().parse::<u32>() {
+                api_level = Some(parsed);
+            }
+        }
+    }
+
+    let battery_level = parse_battery_level(output);
+    (battery_level, android_version, api_level)
+}
+
 /// Asynchronously fetches device details (battery level, Android OS version, and API level)
-/// for a connected device using adb commands.
-async fn populate_device_details(adb_path: &Path, device: &mut Device) {
+/// for a connected device using minimal `adb shell` invocations.
+async fn populate_device_details(
+    adb_path: &Path,
+    device: &mut Device,
+    fetch_static: bool,
+    fetch_battery: bool,
+) {
     let serial = &device.serial;
     let timeout_dur = Duration::from_millis(1500);
 
-    // 1. Battery level
-    let battery_cmd = tokio::process::Command::new(adb_path)
-        .args(["-s", serial, "shell", "dumpsys", "battery"])
-        .output();
-    if let Ok(Ok(out)) = tokio::time::timeout(timeout_dur, battery_cmd).await {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(lvl) = parse_battery_level(&text) {
-                device.battery_level = Some(lvl);
+    if fetch_static {
+        let script = "echo __VER__=$(getprop ro.build.version.release); echo __SDK__=$(getprop ro.build.version.sdk); dumpsys battery";
+        let cmd = tokio::process::Command::new(adb_path)
+            .args(["-s", serial, "shell", script])
+            .output();
+        if let Ok(Ok(out)) = tokio::time::timeout(timeout_dur, cmd).await {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let (battery, ver, sdk) = parse_combined_device_details(&text);
+                if battery.is_some() {
+                    device.battery_level = battery;
+                }
+                if ver.is_some() {
+                    device.android_version = ver;
+                }
+                if sdk.is_some() {
+                    device.api_level = sdk;
+                }
             }
         }
-    }
-
-    // 2. Android OS version (ro.build.version.release)
-    let release_cmd = tokio::process::Command::new(adb_path)
-        .args(["-s", serial, "shell", "getprop", "ro.build.version.release"])
-        .output();
-    if let Ok(Ok(out)) = tokio::time::timeout(timeout_dur, release_cmd).await {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !text.is_empty() {
-                device.android_version = Some(text);
-            }
-        }
-    }
-
-    // 3. API level (ro.build.version.sdk)
-    let sdk_cmd = tokio::process::Command::new(adb_path)
-        .args(["-s", serial, "shell", "getprop", "ro.build.version.sdk"])
-        .output();
-    if let Ok(Ok(out)) = tokio::time::timeout(timeout_dur, sdk_cmd).await {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if let Ok(sdk) = text.parse::<u32>() {
-                device.api_level = Some(sdk);
+    } else if fetch_battery {
+        let battery_cmd = tokio::process::Command::new(adb_path)
+            .args(["-s", serial, "shell", "dumpsys", "battery"])
+            .output();
+        if let Ok(Ok(out)) = tokio::time::timeout(timeout_dur, battery_cmd).await {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                if let Some(lvl) = parse_battery_level(&text) {
+                    device.battery_level = Some(lvl);
+                }
             }
         }
     }
@@ -282,6 +313,15 @@ async fn populate_device_details(adb_path: &Path, device: &mut Device) {
 
 /// Asynchronously queries `adb devices -l` and enriches online devices with battery and OS metrics.
 pub async fn fetch_devices(adb_path: &Path) -> anyhow::Result<Vec<Device>> {
+    let mut cache = HashMap::new();
+    fetch_devices_with_cache(adb_path, &mut cache, true).await
+}
+
+async fn fetch_devices_with_cache(
+    adb_path: &Path,
+    cache: &mut HashMap<String, CachedDeviceInfo>,
+    refresh_battery: bool,
+) -> anyhow::Result<Vec<Device>> {
     let output = tokio::process::Command::new(adb_path)
         .args(["devices", "-l"])
         .output()
@@ -295,15 +335,34 @@ pub async fn fetch_devices(adb_path: &Path) -> anyhow::Result<Vec<Device>> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let devices = Device::parse_adb_devices_output(&stdout);
 
-    // Concurrently fetch battery, release version, and API level for online devices
+    let online_serials: HashSet<String> = devices
+        .iter()
+        .filter(|d| d.state == DeviceState::Device)
+        .map(|d| d.serial.clone())
+        .collect();
+    cache.retain(|serial, _| online_serials.contains(serial));
+
+    // Concurrently fetch missing/refreshed metrics for online devices
     let mut tasks = Vec::with_capacity(devices.len());
     for mut dev in devices {
         if dev.state == DeviceState::Device {
-            let adb = adb_path.to_path_buf();
-            tasks.push(tokio::spawn(async move {
-                populate_device_details(&adb, &mut dev).await;
-                dev
-            }));
+            let cached = cache.get(&dev.serial).cloned();
+            let fetch_static = cached.is_none();
+            if let Some(ref info) = cached {
+                dev.android_version = info.android_version.clone();
+                dev.api_level = info.api_level;
+                dev.battery_level = info.battery_level;
+            }
+
+            if fetch_static || refresh_battery {
+                let adb = adb_path.to_path_buf();
+                tasks.push(tokio::spawn(async move {
+                    populate_device_details(&adb, &mut dev, fetch_static, refresh_battery).await;
+                    dev
+                }));
+            } else {
+                tasks.push(tokio::spawn(async move { dev }));
+            }
         } else {
             tasks.push(tokio::spawn(async move { dev }));
         }
@@ -312,6 +371,16 @@ pub async fn fetch_devices(adb_path: &Path) -> anyhow::Result<Vec<Device>> {
     let mut populated_devices = Vec::with_capacity(tasks.len());
     for task in tasks {
         if let Ok(dev) = task.await {
+            if dev.state == DeviceState::Device {
+                cache.insert(
+                    dev.serial.clone(),
+                    CachedDeviceInfo {
+                        android_version: dev.android_version.clone(),
+                        api_level: dev.api_level,
+                        battery_level: dev.battery_level,
+                    },
+                );
+            }
             populated_devices.push(dev);
         }
     }
@@ -329,11 +398,15 @@ pub fn spawn_device_monitor(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         let mut last_devices: Option<Vec<Device>> = None;
+        let mut cache: HashMap<String, CachedDeviceInfo> = HashMap::new();
+        let mut tick_count: u64 = 0;
 
         loop {
             ticker.tick().await;
+            let refresh_battery = tick_count.is_multiple_of(5);
+            tick_count = tick_count.wrapping_add(1);
 
-            match fetch_devices(&adb_path).await {
+            match fetch_devices_with_cache(&adb_path, &mut cache, refresh_battery).await {
                 Ok(devices) => {
                     let changed = match &last_devices {
                         Some(prev) => prev != &devices,
@@ -350,8 +423,15 @@ pub fn spawn_device_monitor(
                         last_devices = Some(devices);
                     }
                 }
-                Err(_) => {
-                    // Suppress transient ADB connection errors during polling
+                Err(err) => {
+                    // Back off polling if adb executable itself is missing to avoid idle CPU churn
+                    if err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        ticker.reset();
+                    }
                 }
             }
         }
@@ -501,5 +581,28 @@ mod tests {
             "Take Screenshot to Project Folder"
         );
         assert_eq!(DeviceAction::RebootDevice.title(), "Reboot Device");
+    }
+
+    #[test]
+    fn test_parse_batched_device_details() {
+        let output = "\
+__VER__=15
+__SDK__=35
+Current Battery Service state:
+  AC powered: false
+  USB powered: true
+  level: 92
+  scale: 100
+";
+        let (battery, ver, sdk) = parse_combined_device_details(output);
+        assert_eq!(battery, Some(92));
+        assert_eq!(ver.as_deref(), Some("15"));
+        assert_eq!(sdk, Some(35));
+
+        let empty_output = "__VER__=\n__SDK__=not_a_num\n";
+        let (battery2, ver2, sdk2) = parse_combined_device_details(empty_output);
+        assert_eq!(battery2, None);
+        assert_eq!(ver2, None);
+        assert_eq!(sdk2, None);
     }
 }
