@@ -6,6 +6,17 @@ All notable changes to **OverridePulse** are documented in this file.
 
 ---
 
+## [0.4.1] — 2026-11-25
+
+### Added
+- **4 New Color Themes**: `Deep Black` (pure OLED `#000000`), `Nord Frost`, `Rosé Pine`, and `Monokai Pro` (now 10 built-in themes total).
+
+### Fixed
+- **Gradle Build & Relaunch Hang**: `run_streaming_cmd` now closes `stdin` and drains/aborts pipe readers shortly after `child.wait()` so background Gradle/Kotlin daemons never keep `Build & Install` stuck after `BUILD SUCCESSFUL`.
+- **Debug Suffix App Launch**: Unified `launch_installed_app` so `Relaunch App` also falls back to `adb shell monkey` when `am start` fails on `applicationIdSuffix` builds (e.g., `.debug`).
+
+---
+
 ## [0.4.0] — 2026-11-24
 
 ### Added

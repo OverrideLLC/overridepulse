@@ -1983,7 +1983,7 @@ mod tests {
         assert_eq!(app.theme, ThemePreset::TokyoNight);
 
         // Jump to Español (last item in Appearance)
-        for _ in 0..6 {
+        for _ in 0..ThemePreset::all().len() {
             handle_key_event(
                 &mut app,
                 &mut runner,

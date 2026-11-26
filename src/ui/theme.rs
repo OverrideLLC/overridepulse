@@ -10,6 +10,10 @@ pub enum ThemePreset {
     Dracula,
     GruvboxDark,
     EmeraldMatrix,
+    DeepBlack,
+    NordFrost,
+    RosePine,
+    MonokaiPro,
 }
 
 impl ThemePreset {
@@ -21,6 +25,10 @@ impl ThemePreset {
             Self::Dracula,
             Self::GruvboxDark,
             Self::EmeraldMatrix,
+            Self::DeepBlack,
+            Self::NordFrost,
+            Self::RosePine,
+            Self::MonokaiPro,
         ]
     }
 
@@ -32,6 +40,10 @@ impl ThemePreset {
             Self::Dracula => "dracula",
             Self::GruvboxDark => "gruvbox",
             Self::EmeraldMatrix => "emerald",
+            Self::DeepBlack => "deep-black",
+            Self::NordFrost => "nord",
+            Self::RosePine => "rose-pine",
+            Self::MonokaiPro => "monokai-pro",
         }
     }
 
@@ -43,6 +55,10 @@ impl ThemePreset {
             Self::Dracula => "Dracula",
             Self::GruvboxDark => "Gruvbox Dark",
             Self::EmeraldMatrix => "Emerald Matrix",
+            Self::DeepBlack => "Deep Black",
+            Self::NordFrost => "Nord Frost",
+            Self::RosePine => "Rosé Pine",
+            Self::MonokaiPro => "Monokai Pro",
         }
     }
 
@@ -54,6 +70,10 @@ impl ThemePreset {
             Self::Dracula => "Classic purple, pink & vibrant cyan",
             Self::GruvboxDark => "Retro warm espresso with aqua & gold",
             Self::EmeraldMatrix => "Minimal terminal emerald & mint",
+            Self::DeepBlack => "Pure OLED pitch black with crisp cyan",
+            Self::NordFrost => "Arctic slate with glacier blue & frost",
+            Self::RosePine => "Soho obsidian with rosewood, iris & gold",
+            Self::MonokaiPro => "Charcoal studio with vivid lime & amber",
         }
     }
 
@@ -147,6 +167,62 @@ impl ThemePreset {
                 bg_selected_inactive: Color::Rgb(22, 42, 36),
                 active_border: Color::Rgb(52, 211, 153),
                 inactive_border: Color::Rgb(45, 74, 64),
+            },
+            Self::DeepBlack => ThemePalette {
+                accent: Color::Rgb(56, 189, 248),
+                success: Color::Rgb(74, 222, 128),
+                warning: Color::Rgb(251, 191, 36),
+                error: Color::Rgb(248, 113, 113),
+                text_primary: Color::Rgb(245, 245, 247),
+                text_muted: Color::Rgb(110, 110, 122),
+                bg_dark: Color::Rgb(0, 0, 0),
+                bg_card: Color::Rgb(10, 10, 12),
+                bg_selected: Color::Rgb(24, 34, 48),
+                bg_selected_inactive: Color::Rgb(16, 20, 26),
+                active_border: Color::Rgb(56, 189, 248),
+                inactive_border: Color::Rgb(38, 38, 44),
+            },
+            Self::NordFrost => ThemePalette {
+                accent: Color::Rgb(136, 192, 208),
+                success: Color::Rgb(163, 190, 140),
+                warning: Color::Rgb(235, 203, 139),
+                error: Color::Rgb(191, 97, 106),
+                text_primary: Color::Rgb(236, 239, 244),
+                text_muted: Color::Rgb(143, 155, 179),
+                bg_dark: Color::Rgb(46, 52, 64),
+                bg_card: Color::Rgb(59, 66, 82),
+                bg_selected: Color::Rgb(67, 76, 94),
+                bg_selected_inactive: Color::Rgb(54, 61, 76),
+                active_border: Color::Rgb(136, 192, 208),
+                inactive_border: Color::Rgb(76, 86, 106),
+            },
+            Self::RosePine => ThemePalette {
+                accent: Color::Rgb(235, 188, 186),
+                success: Color::Rgb(156, 207, 216),
+                warning: Color::Rgb(246, 193, 119),
+                error: Color::Rgb(235, 111, 146),
+                text_primary: Color::Rgb(224, 222, 244),
+                text_muted: Color::Rgb(144, 140, 170),
+                bg_dark: Color::Rgb(25, 23, 36),
+                bg_card: Color::Rgb(31, 29, 46),
+                bg_selected: Color::Rgb(48, 43, 72),
+                bg_selected_inactive: Color::Rgb(38, 35, 58),
+                active_border: Color::Rgb(235, 188, 186),
+                inactive_border: Color::Rgb(64, 61, 82),
+            },
+            Self::MonokaiPro => ThemePalette {
+                accent: Color::Rgb(120, 220, 232),
+                success: Color::Rgb(169, 220, 118),
+                warning: Color::Rgb(255, 216, 102),
+                error: Color::Rgb(255, 97, 136),
+                text_primary: Color::Rgb(252, 252, 250),
+                text_muted: Color::Rgb(147, 146, 147),
+                bg_dark: Color::Rgb(34, 31, 34),
+                bg_card: Color::Rgb(45, 42, 46),
+                bg_selected: Color::Rgb(64, 62, 65),
+                bg_selected_inactive: Color::Rgb(52, 49, 54),
+                active_border: Color::Rgb(255, 216, 102),
+                inactive_border: Color::Rgb(82, 78, 84),
             },
         }
     }

@@ -597,6 +597,7 @@ pub async fn run_streaming_cmd(
     sender: &UnboundedSender<AppEvent>,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<bool, std::io::Error> {
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
@@ -610,7 +611,7 @@ pub async fn run_streaming_cmd(
     let stderr = child.stderr.take();
 
     let sender_out = sender.clone();
-    let stdout_task = tokio::spawn(async move {
+    let mut stdout_task = tokio::spawn(async move {
         if let Some(out) = stdout {
             let mut reader = BufReader::new(out).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -622,7 +623,7 @@ pub async fn run_streaming_cmd(
     });
 
     let sender_err = sender.clone();
-    let stderr_task = tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         if let Some(err) = stderr {
             let mut reader = BufReader::new(err).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -663,8 +664,15 @@ pub async fn run_streaming_cmd(
         }
     };
 
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
+    // Drain any buffered output briefly, then abort reader tasks if a background daemon
+    // (such as Gradle/Kotlin daemon) inherited the pipe FDs and keeps them open.
+    let drain = std::time::Duration::from_millis(250);
+    if tokio::time::timeout(drain, &mut stdout_task).await.is_err() {
+        stdout_task.abort();
+    }
+    if tokio::time::timeout(drain, &mut stderr_task).await.is_err() {
+        stderr_task.abort();
+    }
 
     Ok(success)
 }
@@ -1349,6 +1357,51 @@ async fn execute_device_action_internal(
     }
 }
 
+/// Launches an installed Android app using `am start` when the launcher activity
+/// is known, falling back to `monkey` (which handles `applicationIdSuffix` variants).
+async fn launch_installed_app(
+    ctx: &ActionContext,
+    app_id: &str,
+    sender: &UnboundedSender<AppEvent>,
+    cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<bool, std::io::Error> {
+    if let Some(activity) = &ctx.main_activity {
+        let component = if activity.starts_with('.') || activity.contains('/') {
+            format!("{app_id}/{activity}")
+        } else {
+            format!("{app_id}/.{activity}")
+        };
+        let mut start_cmd = Command::new(&ctx.adb_path);
+        start_cmd.args([
+            "-s",
+            &ctx.serial,
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-n",
+            &component,
+        ]);
+        if let Ok(true) = run_streaming_cmd(start_cmd, "am start", sender, cancel_rx).await {
+            return Ok(true);
+        }
+    }
+
+    let mut monkey_cmd = Command::new(&ctx.adb_path);
+    monkey_cmd.args([
+        "-s",
+        &ctx.serial,
+        "shell",
+        "monkey",
+        "-p",
+        app_id,
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1",
+    ]);
+    run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await
+}
+
 async fn execute_build_and_install_debug(
     ctx: &ActionContext,
     sender: &UnboundedSender<AppEvent>,
@@ -1433,45 +1486,7 @@ async fn execute_build_and_install_debug(
                 let _ = sender.send(AppEvent::ProcessOutput(format!(
                     "🚀 Launching application '{app_id}' on device..."
                 )));
-                let mut launched = false;
-                if let Some(activity) = &ctx.main_activity {
-                    let component = if activity.starts_with('.') || activity.contains('/') {
-                        format!("{app_id}/{activity}")
-                    } else {
-                        format!("{app_id}/.{activity}")
-                    };
-                    let mut start_cmd = Command::new(&ctx.adb_path);
-                    start_cmd.args([
-                        "-s",
-                        &ctx.serial,
-                        "shell",
-                        "am",
-                        "start",
-                        "-W",
-                        "-n",
-                        &component,
-                    ]);
-                    if let Ok(true) =
-                        run_streaming_cmd(start_cmd, "am start", sender, cancel_rx).await
-                    {
-                        launched = true;
-                    }
-                }
-                if !launched {
-                    let mut monkey_cmd = Command::new(&ctx.adb_path);
-                    monkey_cmd.args([
-                        "-s",
-                        &ctx.serial,
-                        "shell",
-                        "monkey",
-                        "-p",
-                        &app_id,
-                        "-c",
-                        "android.intent.category.LAUNCHER",
-                        "1",
-                    ]);
-                    let _ = run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
-                }
+                let _ = launch_installed_app(ctx, &app_id, sender, cancel_rx).await;
                 let _ = sender.send(AppEvent::ProcessFinished(
                     true,
                     format!("Installed & launched '{app_id}'"),
@@ -1660,45 +1675,7 @@ async fn execute_build_aab_and_deploy(
                 let _ = sender.send(AppEvent::ProcessOutput(format!(
                     "🚀 Launching application '{app_id}' on device..."
                 )));
-                let mut launched = false;
-                if let Some(activity) = &ctx.main_activity {
-                    let component = if activity.starts_with('.') || activity.contains('/') {
-                        format!("{app_id}/{activity}")
-                    } else {
-                        format!("{app_id}/.{activity}")
-                    };
-                    let mut start_cmd = Command::new(&ctx.adb_path);
-                    start_cmd.args([
-                        "-s",
-                        &ctx.serial,
-                        "shell",
-                        "am",
-                        "start",
-                        "-W",
-                        "-n",
-                        &component,
-                    ]);
-                    if let Ok(true) =
-                        run_streaming_cmd(start_cmd, "am start", sender, cancel_rx).await
-                    {
-                        launched = true;
-                    }
-                }
-                if !launched {
-                    let mut monkey_cmd = Command::new(&ctx.adb_path);
-                    monkey_cmd.args([
-                        "-s",
-                        &ctx.serial,
-                        "shell",
-                        "monkey",
-                        "-p",
-                        &app_id,
-                        "-c",
-                        "android.intent.category.LAUNCHER",
-                        "1",
-                    ]);
-                    let _ = run_streaming_cmd(monkey_cmd, "monkey launch", sender, cancel_rx).await;
-                }
+                let _ = launch_installed_app(ctx, &app_id, sender, cancel_rx).await;
                 let _ = sender.send(AppEvent::ProcessFinished(
                     true,
                     format!("Installed & launched '{app_id}'"),
@@ -1864,38 +1841,7 @@ async fn execute_relaunch_activity(
         "Launching application '{app_id}'..."
     )));
 
-    let mut start_cmd = Command::new(&ctx.adb_path);
-    if let Some(activity) = &ctx.main_activity {
-        let component = if activity.starts_with('.') || activity.contains('/') {
-            format!("{app_id}/{activity}")
-        } else {
-            format!("{app_id}/.{activity}")
-        };
-        start_cmd.args([
-            "-s",
-            &ctx.serial,
-            "shell",
-            "am",
-            "start",
-            "-W",
-            "-n",
-            &component,
-        ]);
-    } else {
-        start_cmd.args([
-            "-s",
-            &ctx.serial,
-            "shell",
-            "monkey",
-            "-p",
-            app_id,
-            "-c",
-            "android.intent.category.LAUNCHER",
-            "1",
-        ]);
-    }
-
-    match run_streaming_cmd(start_cmd, "App relaunch", sender, cancel_rx).await {
+    match launch_installed_app(ctx, app_id, sender, cancel_rx).await {
         Ok(true) => {
             let _ = sender.send(AppEvent::ProcessFinished(
                 true,
@@ -2624,5 +2570,32 @@ mod tests {
         assert_eq!(fallback_found.as_deref(), Some(other_apk.as_path()));
 
         let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_streaming_cmd_does_not_hang_on_inherited_pipe() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5 & echo BUILD_DONE"]);
+
+        let mut cancel_rx = None;
+        let start = std::time::Instant::now();
+        let res = run_streaming_cmd(cmd, "daemon pipe test", &tx, &mut cancel_rx).await;
+        assert!(res.unwrap());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "run_streaming_cmd hung waiting on background child pipe"
+        );
+
+        let mut saw_done = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::ProcessOutput(line) = ev {
+                if line == "BUILD_DONE" {
+                    saw_done = true;
+                }
+            }
+        }
+        assert!(saw_done);
     }
 }
